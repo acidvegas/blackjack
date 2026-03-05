@@ -411,7 +411,7 @@ class IRC:
 				self.players = [Player(nick, bet)]
 				self.dealer_hand = []
 				self.current_idx = 0
-				self.sendmsg(chan, f'{bold}{color(BJ_HEADER, white, green)}{bold}')
+				self.sendmsg(chan, f'{bold}{color(BJ_HEADER, black, green)}{bold}')
 				self.sendmsg(chan, f'{c_nick(nick)} opened a table! Type {c_cmd("!blackjack")} {c_arg("[bet]")} to join or {c_cmd("!deal")} to start.')
 				self.sendmsg(chan, f'{c_nick(nick)} bets {c_money(bet)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._lobby_expired, [chan])
@@ -536,7 +536,7 @@ class IRC:
 				self.pk_community   = []
 				self.pk_current_bet = 0
 				self.pk_cards_shown = False
-				self.sendmsg(chan, f'{bold}{color(POKER_HEADER, white, green)}{bold}')
+				self.sendmsg(chan, f'{bold}{color(POKER_HEADER, black, green)}{bold}')
 				self.sendmsg(chan, f'{c_nick(nick)} opened a poker table! Type {c_cmd("!poker")} to join or {c_cmd("!deal")} to start.')
 				self.sendmsg(chan, f'Blinds: {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.pk_lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._pk_lobby_expired, [chan])
@@ -770,12 +770,12 @@ class IRC:
 			if isinstance(data, dict) and 'chips' in data:
 				leaderboard.append((key, data['chips']))
 		leaderboard.sort(key=lambda x: x[1], reverse=True)
-		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", white, green)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", black, green)}{bold}')
 		for i, (name, chips) in enumerate(leaderboard[:10], 1):
 			self.sendmsg(chan, f' {bold}#{i}{bold} {c_nick(name)} \u2014 {c_money(chips)}')
 
 	def cmd_help(self, nick, chan):
-		self.sendmsg(chan, f'{bold}{color(" COMMANDS ", white, green)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" COMMANDS ", black, green)}{bold}')
 		self.sendmsg(chan, f' {bold}\u2500\u2500 Blackjack \u2500\u2500{bold}')
 		self.sendmsg(chan, f' {c_cmd("!blackjack")} {c_arg("[bet]")} \u2014 Start or join (default: {c_money(DEFAULT_BET)})')
 		self.sendmsg(chan, f' {c_cmd("!hit")} \u2014 Draw a card  |  {c_cmd("!stand")} \u2014 Keep hand  |  {c_cmd("!double")} \u2014 Double down')
@@ -807,7 +807,7 @@ class IRC:
 				player.hand.append(self.shoe.draw())
 			self.dealer_hand.append(self.shoe.draw())
 
-		self.sendmsg(chan, f'{bold}{color(" CARDS DEALT ", white, orange)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" CARDS DEALT ", black, orange)}{bold}')
 		self.show_cards(chan, f'{bold}[Dealer]{bold}', self.dealer_hand, hide_first=True)
 		self.blank(chan)
 
@@ -843,7 +843,7 @@ class IRC:
 	def _dealer_turn(self, chan):
 		all_busted = all(p.status == 'busted' for p in self.players)
 
-		self.sendmsg(chan, f'{bold}{color(" DEALER REVEALS ", white, orange)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" DEALER REVEALS ", black, orange)}{bold}')
 		dtotal = hand_value(self.dealer_hand)
 		self.show_cards(chan, f'{bold}[Dealer]{bold} ({color(str(dtotal), light_blue)})', self.dealer_hand)
 
@@ -865,7 +865,7 @@ class IRC:
 		elif dealer_bj:
 			self.sendmsg(chan, f'{color("Dealer has BLACKJACK!", yellow)}')
 
-		self.sendmsg(chan, f'{bold}{color(" RESULTS ", white, green)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" RESULTS ", black, green)}{bold}')
 
 		for p in self.players:
 			if p.status == 'busted':
@@ -961,7 +961,7 @@ class IRC:
 
 		self.pk_current_bet = bb_amt
 
-		self.sendmsg(chan, f'{bold}{color(" DEALING POKER ", white, orange)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" DEALING POKER ", black, orange)}{bold}')
 		self.sendmsg(chan, f'{c_nick(sb.nick)} posts small blind ({c_money(sb_amt)})')
 		self.sendmsg(chan, f'{c_nick(bb.nick)} posts big blind ({c_money(bb_amt)})')
 
@@ -1046,17 +1046,17 @@ class IRC:
 			self.pk_street = 'flop'
 			for _ in range(3):
 				self.pk_community.append(self.shoe.draw())
-			self.sendmsg(chan, f'{bold}{color(" FLOP ", white, green)}{bold}')
+			self.sendmsg(chan, f'{bold}{color(" FLOP ", black, green)}{bold}')
 			self.show_cards(chan, f'{bold}[Board]{bold}', self.pk_community)
 		elif self.pk_street == 'flop':
 			self.pk_street = 'turn'
 			self.pk_community.append(self.shoe.draw())
-			self.sendmsg(chan, f'{bold}{color(" TURN ", white, green)}{bold}')
+			self.sendmsg(chan, f'{bold}{color(" TURN ", black, green)}{bold}')
 			self.show_cards(chan, f'{bold}[Board]{bold}', self.pk_community)
 		elif self.pk_street == 'turn':
 			self.pk_street = 'river'
 			self.pk_community.append(self.shoe.draw())
-			self.sendmsg(chan, f'{bold}{color(" RIVER ", white, green)}{bold}')
+			self.sendmsg(chan, f'{bold}{color(" RIVER ", black, green)}{bold}')
 			self.show_cards(chan, f'{bold}[Board]{bold}', self.pk_community)
 		elif self.pk_street == 'river':
 			self._pk_showdown(chan)
@@ -1085,7 +1085,7 @@ class IRC:
 
 	def _pk_showdown(self, chan):
 		pots  = poker_calculate_pots(self.pk_players)
-		self.sendmsg(chan, f'{bold}{color(" SHOWDOWN ", white, orange)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" SHOWDOWN ", black, orange)}{bold}')
 		self.show_cards(chan, f'{bold}[Board]{bold}', self.pk_community)
 		self.blank(chan)
 
@@ -1115,7 +1115,7 @@ class IRC:
 				for i, w in enumerate(winners):
 					winnings[w.nick] = winnings.get(w.nick, 0) + split + (1 if i < remainder else 0)
 
-		self.sendmsg(chan, f'{bold}{color(" RESULTS ", white, green)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" RESULTS ", black, green)}{bold}')
 		for p in self.pk_players:
 			won = winnings.get(p.nick, 0)
 			net = won - p.total_bet
