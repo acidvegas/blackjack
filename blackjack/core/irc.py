@@ -114,8 +114,9 @@ def render_hand(cards, hide_first=False):
 
 class IRC:
 	def __init__(self):
-		self.sock = None
-		self.db   = None
+		self.sock    = None
+		self.db      = {}
+		self.db_path = os.path.join('data', 'chips.json')
 		self.shoe = Shoe(NUM_DECKS)
 		self.lock = threading.Lock()
 
@@ -217,10 +218,10 @@ class IRC:
 						line = line_bytes.decode('latin-1')
 					if not line or len(line.split()) < 2:
 						continue
-				_log(f'[<<] {line}')
-				if line.startswith('ERROR :Closing Link:'):
-					raise Exception('Connection has closed.')
-				self.handle_events(line)
+					_log(f'[<<] {line}')
+					if line.startswith('ERROR :Closing Link:'):
+						raise Exception('Connection has closed.')
+					self.handle_events(line)
 			except Exception as ex:
 				_log(f'[!] Unexpected error: {ex}')
 				traceback.print_exc()
@@ -360,8 +361,12 @@ class IRC:
 		threading.Thread(target=self._db_sync_loop, daemon=True).start()
 
 	def save_db(self):
+		if self.db is None:
+			return
 		try:
-			with open(self.db_path, 'w') as f:
+			db_path = getattr(self, 'db_path', os.path.join('data', 'chips.json'))
+			os.makedirs('data', exist_ok=True)
+			with open(db_path, 'w') as f:
 				json.dump(self.db, f, indent=2)
 		except Exception as ex:
 			_log(f'[!] Database save failed: {ex}')
@@ -373,6 +378,8 @@ class IRC:
 			self.save_db()
 
 	def get_player_data(self, nick):
+		if self.db is None:
+			self.db = {}
 		key = nick.lower()
 		if key not in self.db:
 			self.db[key] = {'chips': STARTING_CHIPS, 'last_reset': 0}
