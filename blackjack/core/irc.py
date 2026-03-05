@@ -178,7 +178,6 @@ class IRC:
 
 	def raw(self, msg):
 		self.sock.send(bytes(msg + '\r\n', 'utf-8'))
-		time.sleep(0.05)
 
 	def sendmsg(self, target, msg):
 		self.raw(f'PRIVMSG {target} :{msg}')
@@ -416,9 +415,7 @@ class IRC:
 				self.players = [Player(nick, bet)]
 				self.dealer_hand = []
 				self.current_idx = 0
-				self.sendmsg(chan, f'{bold}{color(BJ_HEADER, black, green)}{bold}')
-				self.sendmsg(chan, f'{c_nick(nick)} opened a table! Type {c_cmd("!blackjack")} {c_arg("[bet]")} to join or {c_cmd("!deal")} to start.')
-				self.sendmsg(chan, f'{c_nick(nick)} bets {c_money(bet)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
+				self.sendmsg(chan, f'{bold}{color(BJ_HEADER, black, green)}{bold} {c_nick(nick)} opened a table! Type {c_cmd("!blackjack")} {c_arg("[bet]")} to join or {c_cmd("!deal")} to start. Bets {c_money(bet)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._lobby_expired, [chan])
 				self.lobby_timer.daemon = True
 				self.lobby_timer.start()
@@ -541,9 +538,7 @@ class IRC:
 				self.pk_community   = []
 				self.pk_current_bet = 0
 				self.pk_cards_shown = False
-				self.sendmsg(chan, f'{bold}{color(POKER_HEADER, black, green)}{bold}')
-				self.sendmsg(chan, f'{c_nick(nick)} opened a poker table! Type {c_cmd("!poker")} to join or {c_cmd("!deal")} to start.')
-				self.sendmsg(chan, f'Blinds: {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
+				self.sendmsg(chan, f'{bold}{color(POKER_HEADER, black, green)}{bold} {c_nick(nick)} opened a poker table! Type {c_cmd("!poker")} to join or {c_cmd("!deal")} to start. Blinds: {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.pk_lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._pk_lobby_expired, [chan])
 				self.pk_lobby_timer.daemon = True
 				self.pk_lobby_timer.start()
@@ -630,11 +625,10 @@ class IRC:
 			current.bet       += to_call
 			current.acted      = True
 
-			pot = sum(p.total_bet for p in self.pk_players)
 			if current.all_in:
-				msg = f'{c_nick(current.nick)} calls all-in {c_money(to_call)} (Pot: {c_money(pot)})'
+				msg = f'{c_nick(current.nick)} calls all-in {c_money(to_call)}'
 			else:
-				msg = f'{c_nick(current.nick)} calls {c_money(to_call)} (Pot: {c_money(pot)})'
+				msg = f'{c_nick(current.nick)} calls {c_money(to_call)}'
 			self._pk_after_action(chan, msg)
 
 	def cmd_raise(self, nick, chan, args):
@@ -675,8 +669,7 @@ class IRC:
 				if p is not current and not p.folded and not p.all_in:
 					p.acted = False
 
-			pot = sum(p.total_bet for p in self.pk_players)
-			self._pk_after_action(chan, f'{c_nick(current.nick)} raises to {c_money(raise_to)} (Pot: {c_money(pot)})')
+			self._pk_after_action(chan, f'{c_nick(current.nick)} raises to {c_money(raise_to)}')
 
 	def cmd_allin(self, nick, chan):
 		with self.lock:
@@ -706,8 +699,7 @@ class IRC:
 			elif allin_total > self.pk_current_bet:
 				self.pk_current_bet = allin_total
 
-			pot = sum(p.total_bet for p in self.pk_players)
-			self._pk_after_action(chan, f'{c_nick(current.nick)} goes ALL-IN for {c_money(available)}! (Pot: {c_money(pot)})')
+			self._pk_after_action(chan, f'{c_nick(current.nick)} goes ALL-IN for {c_money(available)}!')
 
 	# ──────────────────── Shared Commands ────────────────────
 
@@ -1003,11 +995,14 @@ class IRC:
 				p.hand.append(self.shoe.draw())
 
 		for p in self.pk_players:
-			self.show_cards(p.nick, 'Your hole cards:', p.hand)
+			try:
+				self.show_cards(p.nick, 'Your hole cards:', p.hand)
+			except Exception as ex:
+				_log(f'[!] Failed to PM hole cards to {p.nick}: {ex}')
+				traceback.print_exc()
 
-		self.sendmsg(chan, 'Hole cards dealt \u2014 check your PMs!')
 		pot = sum(p.total_bet for p in self.pk_players)
-		self.sendmsg(chan, f'Pot: {c_money(pot)}')
+		self.sendmsg(chan, f'Hole cards dealt \u2014 check your PMs! Pot: {c_money(pot)}')
 
 		self.pk_last_move = time.time()
 		threading.Thread(target=self._pk_move_timer, args=(chan,), daemon=True).start()
