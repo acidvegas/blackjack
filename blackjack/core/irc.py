@@ -177,6 +177,7 @@ class IRC:
 			self.sock = ctx.wrap_socket(self.sock, server_hostname=config.connection.server)
 
 	def raw(self, msg):
+		_log(f'[>>] {msg}')
 		self.sock.send(bytes(msg + '\r\n', 'utf-8'))
 
 	def sendmsg(self, target, msg):
@@ -219,9 +220,10 @@ class IRC:
 						line = line_bytes.decode('latin-1')
 					if not line or len(line.split()) < 2:
 						continue
-					if line.startswith('ERROR :Closing Link:'):
-						raise Exception('Connection has closed.')
-					self.handle_events(line)
+				_log(f'[<<] {line}')
+				if line.startswith('ERROR :Closing Link:'):
+					raise Exception('Connection has closed.')
+				self.handle_events(line)
 			except Exception as ex:
 				_log(f'[!] Unexpected error: {ex}')
 				traceback.print_exc()
