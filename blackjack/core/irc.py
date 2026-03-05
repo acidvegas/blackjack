@@ -181,11 +181,9 @@ class IRC:
 
 	def sendmsg(self, target, msg):
 		self.raw(f'PRIVMSG {target} :{msg}')
-		time.sleep(0.4)
 
 	def blank(self, chan):
 		self.raw(f'PRIVMSG {chan} :\x0f')
-		time.sleep(0.1)
 
 	def show_cards(self, target, label, cards, hide_first=False):
 		is_channel = target[0] in '#&'
@@ -197,7 +195,6 @@ class IRC:
 			self.sendmsg(target, label)
 			for line in lines:
 				self.raw(f'PRIVMSG {target} :{line}')
-				time.sleep(0.1)
 
 	def join(self, chan, key=None):
 		self.raw(f'JOIN {chan} {key}') if key else self.raw(f'JOIN {chan}')
@@ -807,7 +804,6 @@ class IRC:
 						self.sendmsg(chan, line)
 					else:
 						self.raw(f'PRIVMSG {chan} :\x0f')
-					time.sleep(0.3)
 		except FileNotFoundError:
 			self.sendmsg(chan, f'{color("ERROR", red)} cheat.txt not found.')
 
@@ -870,7 +866,6 @@ class IRC:
 
 		if not all_busted:
 			while dtotal < 17:
-				time.sleep(1)
 				card = self.shoe.draw()
 				self.dealer_hand.append(card)
 				dtotal = hand_value(self.dealer_hand)
@@ -1089,7 +1084,6 @@ class IRC:
 				self.sendmsg(chan, f'{bold}Players are all-in \u2014 showing cards:{bold}')
 				for p in active:
 					self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {format_card(*p.hand[0])} {format_card(*p.hand[1])}')
-			time.sleep(2)
 			self._pk_next_street(chan)
 			return
 
