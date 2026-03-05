@@ -13,20 +13,24 @@ class connection:
 	channel	   = '#dev'
 	key	       = None
 
+
 class cert:
 	file     = None
 	key      = None
 	password = None
 
+
 class ident:
-	nickname = 'BlackJack'
-	username = 'blackjack'
-	realname = 'https://acid.vegas/blackjack'
+	nickname = 'DEALER'
+	username = 'casino'
+	realname = 'https://git.supernets.org/acidvegas/irc-casino'
+
 
 class login:
 	network  = None
 	nickserv = None
 	operator = None
+
 
 class settings:
 	cmd_char = '!'

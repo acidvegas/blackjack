@@ -1,0 +1,257 @@
+#!/usr/bin/env python
+# BlackJack IRC Bot - Developed by acidvegas in Python (https://acid.vegas/blackjack)
+# cards.py
+
+import random
+from collections import Counter
+from itertools import combinations
+
+# --- Game Constants ---
+NUM_DECKS        = 6
+MAX_PLAYERS      = 7
+DEFAULT_BET      = 100
+MIN_BET          = 10
+MAX_BET          = 50000
+STARTING_CHIPS   = 1000
+MOVE_TIMEOUT     = 300
+LOBBY_TIMEOUT    = 30
+DB_SYNC_INTERVAL = 300
+RESET_COOLDOWN   = 86400
+SMALL_BLIND      = 5
+BIG_BLIND        = 10
+
+# --- IRC Formatting ---
+bold       = '\x02'
+reset      = '\x0f'
+sym_arrow  = '\u2192'
+sym_check  = '\u2713'
+sym_cross  = '\u2717'
+sym_dash   = '\u2500'
+sym_star   = '\u2605'
+white      = '00'
+black      = '01'
+blue       = '02'
+green      = '03'
+red        = '04'
+orange     = '07'
+yellow     = '08'
+light_blue = '12'
+grey       = '14'
+
+
+def color(msg, foreground, background=None):
+	if background:
+		return f'\x03{foreground},{background}{msg}{reset}'
+	return f'\x03{foreground}{msg}{reset}'
+
+
+# --- Card Data ---
+SUITS = {
+	'hearts'   : ('❤', True),
+	'diamonds' : ('♦', True),
+	'clubs'    : ('♣', False),
+	'spades'   : ('♠', False),
+}
+RANKS       = ['A','2','3','4','5','6','7','8','9','10','J','Q','K']
+RANK_VALUES = {'A':11, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':10, 'Q':10, 'K':10}
+
+CARD_ART = {
+	'A'  : ('A      ','       ','   X   ','       ','      A'),
+	'2'  : ('2      ','   X   ','       ','   X   ','      2'),
+	'3'  : ('3      ','   X   ','   X   ','   X   ','      3'),
+	'4'  : ('4      ','  X X  ','       ','  X X  ','      4'),
+	'5'  : ('5      ','  X X  ','   X   ','  X X  ','      5'),
+	'6'  : ('6      ','  X X  ','  X X  ','  X X  ','      6'),
+	'7'  : ('7      ','  X X  ','  XXX  ','  X X  ','      7'),
+	'8'  : ('8      ','  XXX  ','  X X  ','  XXX  ','      8'),
+	'9'  : ('9      ','  XXX  ','  XXX  ','  XXX  ','      9'),
+	'10' : ('10     ','  XXX  ',' XX XX ','  XXX  ','     10'),
+	'J'  : ('J      ','       ','   X   ','       ','      J'),
+	'Q'  : ('Q      ','       ','   X   ','       ','      Q'),
+	'K'  : ('K      ','       ','   X   ','       ','      K'),
+}
+FACEDOWN = ('\u2593' * 7,) * 5
+
+BJ_HEADER    = " \u2660 \u2764  BLACKJACK  \u2666 \u2663 "
+POKER_HEADER = " \u2660 \u2764  TEXAS HOLD'EM  \u2666 \u2663 "
+
+
+# --- Blackjack Hand Value ---
+
+def hand_value(cards):
+	total = sum(RANK_VALUES[rank] for rank, _ in cards)
+	aces  = sum(1 for rank, _ in cards if rank == 'A')
+	while total > 21 and aces:
+		total -= 10
+		aces  -= 1
+	return total
+
+
+# --- Card Formatting ---
+
+def format_card(rank, suit):
+	sym, is_red = SUITS[suit]
+	return color(f'{rank}{sym}', red if is_red else black, white)
+
+
+def format_hand(cards, hide_first=False):
+	if hide_first and len(cards) > 1:
+		return color('[??]', grey, white) + ' ' + ' '.join(format_card(r, s) for r, s in cards[1:])
+	return ' '.join(format_card(r, s) for r, s in cards)
+
+
+def render_hand(cards, hide_first=False):
+	lines = [[] for _ in range(5)]
+	for i, (rank, suit) in enumerate(cards):
+		if hide_first and i == 0:
+			for j in range(5):
+				lines[j].append(color(FACEDOWN[j], light_blue, blue))
+		else:
+			sym, is_red = SUITS[suit]
+			card_color = red if is_red else black
+			art = CARD_ART[rank]
+			for j in range(5):
+				lines[j].append(color(art[j].replace('X', sym), card_color, white))
+	return [' '.join(line) for line in lines]
+
+
+# --- Poker Hand Evaluation ---
+
+POKER_VALUES = {'A':14,'K':13,'Q':12,'J':11,'10':10,'9':9,'8':8,'7':7,'6':6,'5':5,'4':4,'3':3,'2':2}
+
+HAND_NAMES = {
+	8: 'Straight Flush', 7: 'Four of a Kind', 6: 'Full House',
+	5: 'Flush', 4: 'Straight', 3: 'Three of a Kind',
+	2: 'Two Pair', 1: 'Pair', 0: 'High Card',
+}
+
+RANK_NAMES = {
+	14:'Ace', 13:'King', 12:'Queen', 11:'Jack', 10:'Ten',
+	9:'Nine', 8:'Eight', 7:'Seven', 6:'Six', 5:'Five',
+	4:'Four', 3:'Three', 2:'Two',
+}
+
+RANK_NAMES_PLURAL = {
+	14:'Aces', 13:'Kings', 12:'Queens', 11:'Jacks', 10:'Tens',
+	9:'Nines', 8:'Eights', 7:'Sevens', 6:'Sixes', 5:'Fives',
+	4:'Fours', 3:'Threes', 2:'Twos',
+}
+
+
+def _rname(val, plural=False):
+	m = RANK_NAMES_PLURAL if plural else RANK_NAMES
+	return m.get(val, str(val))
+
+
+def poker_rank_five(five_cards):
+	values = sorted([POKER_VALUES[c[0]] for c in five_cards], reverse=True)
+	suits  = [c[1] for c in five_cards]
+	is_flush = len(set(suits)) == 1
+	unique   = sorted(set(values), reverse=True)
+
+	is_straight = False
+	high = values[0]
+	if len(unique) == 5:
+		if unique[0] - unique[4] == 4:
+			is_straight = True
+			high = unique[0]
+		elif unique == [14, 5, 4, 3, 2]:
+			is_straight = True
+			high = 5
+
+	counts = Counter(values)
+	groups = sorted(counts.items(), key=lambda x: (x[1], x[0]), reverse=True)
+	freq   = [g[1] for g in groups]
+	gv     = [g[0] for g in groups]
+
+	if is_straight and is_flush:  return (8, high)
+	if freq == [4, 1]:            return (7, gv[0], gv[1])
+	if freq == [3, 2]:            return (6, gv[0], gv[1])
+	if is_flush:                  return (5,) + tuple(values)
+	if is_straight:               return (4, high)
+	if freq == [3, 1, 1]:         return (3, gv[0], gv[1], gv[2])
+	if freq == [2, 2, 1]:         return (2, gv[0], gv[1], gv[2])
+	if freq == [2, 1, 1, 1]:      return (1, gv[0], gv[1], gv[2], gv[3])
+	return (0,) + tuple(values)
+
+
+def poker_best_hand(seven_cards):
+	best = None
+	for combo in combinations(seven_cards, 5):
+		rank = poker_rank_five(combo)
+		if best is None or rank > best:
+			best = rank
+	return best
+
+
+def poker_hand_name(rank_tuple):
+	cat = rank_tuple[0]
+	if cat == 8:
+		return 'Royal Flush' if rank_tuple[1] == 14 else f'Straight Flush, {_rname(rank_tuple[1])}-high'
+	if cat == 7: return f'Four of a Kind, {_rname(rank_tuple[1], True)}'
+	if cat == 6: return f'Full House, {_rname(rank_tuple[1], True)} full of {_rname(rank_tuple[2], True)}'
+	if cat == 5: return f'Flush, {_rname(rank_tuple[1])}-high'
+	if cat == 4: return f'Straight, {_rname(rank_tuple[1])}-high'
+	if cat == 3: return f'Three of a Kind, {_rname(rank_tuple[1], True)}'
+	if cat == 2: return f'Two Pair, {_rname(rank_tuple[1], True)} and {_rname(rank_tuple[2], True)}'
+	if cat == 1: return f'Pair of {_rname(rank_tuple[1], True)}'
+	return f'{_rname(rank_tuple[1])}-high'
+
+
+def poker_calculate_pots(players):
+	bet_levels = sorted(set(p.total_bet for p in players if p.total_bet > 0))
+	pots = []
+	prev = 0
+	for level in bet_levels:
+		contributors = [p for p in players if p.total_bet >= level]
+		amount       = (level - prev) * len(contributors)
+		eligible     = [p for p in contributors if not p.folded]
+		if amount > 0 and eligible:
+			pots.append((amount, eligible))
+		prev = level
+	return pots
+
+
+# --- Classes ---
+
+class Shoe:
+	def __init__(self, num_decks=6):
+		self.num_decks = num_decks
+		self.cards     = []
+		self.shuffle()
+
+	def shuffle(self):
+		self.cards = [(rank, suit) for _ in range(self.num_decks) for suit in SUITS for rank in RANKS]
+		random.shuffle(self.cards)
+
+	def draw(self):
+		if len(self.cards) < 30:
+			self.shuffle()
+		return self.cards.pop()
+
+
+class Player:
+	def __init__(self, nick, bet):
+		self.nick   = nick
+		self.bet    = bet
+		self.hand   = []
+		self.status = 'playing'
+
+	@property
+	def total(self):
+		return hand_value(self.hand)
+
+	@property
+	def is_blackjack(self):
+		return len(self.hand) == 2 and self.total == 21
+
+
+class PokerPlayer:
+	def __init__(self, nick):
+		self.nick      = nick
+		self.hand      = []
+		self.bet       = 0
+		self.total_bet = 0
+		self.folded    = False
+		self.all_in    = False
+		self.acted     = False
