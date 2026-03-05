@@ -3,14 +3,14 @@
 # config.py
 
 class connection:
-	server     = 'irc.server.com'
+	server     = 'irc.supernets.org'
 	port       = 6667
 	proxy      = None
 	ipv6       = False
 	ssl	       = False
 	ssl_verify = False
 	vhost      = None
-	channel	   = '#blackjack'
+	channel	   = '#dev'
 	key	       = None
 
 class cert:
