@@ -15,7 +15,7 @@ import config
 from cards import (
 	NUM_DECKS, MAX_PLAYERS, DEFAULT_BET, MIN_BET, MAX_BET, STARTING_CHIPS,
 	MOVE_TIMEOUT, LOBBY_TIMEOUT, DB_SYNC_INTERVAL, RESET_COOLDOWN,
-	SMALL_BLIND, BIG_BLIND,
+	SMALL_BLIND, BIG_BLIND, HOUSE_STARTING,
 	SUITS, CARD_ART, FACEDOWN,
 	hand_value, poker_best_hand, poker_hand_name, poker_calculate_pots,
 	Shoe, Player, PokerPlayer,
@@ -119,6 +119,7 @@ class IRC:
 		self.db_path = os.path.join('data', 'chips.json')
 		self.shoe = Shoe(NUM_DECKS)
 		self.lock = threading.Lock()
+		self.chan = None
 
 		# Display
 		self.mini_mode = False
@@ -357,8 +358,13 @@ class IRC:
 		else:
 			self.db = {}
 			_log('No database found, starting fresh.')
+		if '_house' not in self.db:
+			self.db['_house'] = {'chips': HOUSE_STARTING}
+		if '_resets' not in self.db:
+			self.db['_resets'] = {}
 		self.save_db()
 		threading.Thread(target=self._db_sync_loop, daemon=True).start()
+		threading.Thread(target=self._reset_check_loop, daemon=True).start()
 
 	def save_db(self):
 		if self.db is None:
@@ -376,6 +382,36 @@ class IRC:
 		while True:
 			time.sleep(DB_SYNC_INTERVAL)
 			self.save_db()
+
+	def _reset_check_loop(self):
+		while True:
+			time.sleep(60)
+			try:
+				resets = self.db.get('_resets', {})
+				done = []
+				for nick_lower, req_time in list(resets.items()):
+					if time.time() - req_time >= RESET_COOLDOWN:
+						data = self.get_player_data(nick_lower)
+						data['chips'] = STARTING_CHIPS
+						data['last_reset'] = time.time()
+						done.append(nick_lower)
+						if self.chan:
+							self.sendmsg(self.chan, f'{c_nick(nick_lower)} has received their {c_money(STARTING_CHIPS)} chip reset!')
+				for nick_lower in done:
+					del resets[nick_lower]
+				if done:
+					self.save_db()
+			except Exception as ex:
+				_log(f'[!] Reset check error: {ex}')
+				traceback.print_exc()
+
+	def house_chips(self):
+		return self.db.get('_house', {}).get('chips', HOUSE_STARTING)
+
+	def house_add(self, amount):
+		if '_house' not in self.db:
+			self.db['_house'] = {'chips': HOUSE_STARTING}
+		self.db['_house']['chips'] += amount
 
 	def get_player_data(self, nick):
 		if self.db is None:
@@ -741,45 +777,46 @@ class IRC:
 	def cmd_chips(self, nick, chan, args=None):
 		data  = self.get_player_data(nick)
 		chips = data['chips']
+		resets = self.db.setdefault('_resets', {})
+		nick_lower = nick.lower()
 
 		if args and args[0].lower() == 'reset':
+			if nick_lower in resets:
+				remaining = RESET_COOLDOWN - (time.time() - resets[nick_lower])
+				if remaining > 0:
+					hours   = int(remaining // 3600)
+					minutes = int((remaining % 3600) // 60)
+					self.sendmsg(chan, f'{c_nick(nick)}: reset pending. Chips arrive in {bold}{hours}h {minutes}m{bold}.')
+				else:
+					self.sendmsg(chan, f'{c_nick(nick)}: reset processing momentarily.')
+				return
 			last_reset = data.get('last_reset', 0)
-			if last_reset > 0:
-				elapsed = time.time() - last_reset
-				if elapsed < RESET_COOLDOWN:
-					remaining = RESET_COOLDOWN - elapsed
-					hours     = int(remaining // 3600)
-					minutes   = int((remaining % 3600) // 60)
-					self.sendmsg(chan, f'{c_nick(nick)}: reset on cooldown. Try again in {bold}{hours}h {minutes}m{bold}.')
-					return
-			data['chips']      = STARTING_CHIPS
-			data['last_reset'] = time.time()
-			self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
-			self.sendmsg(chan, f'{c_nick(nick)} has reset their chips to {c_money(STARTING_CHIPS)}!')
+			elapsed = time.time() - last_reset if last_reset > 0 else float('inf')
+			if elapsed < RESET_COOLDOWN:
+				remaining = RESET_COOLDOWN - elapsed
+				hours     = int(remaining // 3600)
+				minutes   = int((remaining % 3600) // 60)
+				self.sendmsg(chan, f'{c_nick(nick)}: reset on cooldown. Try again in {bold}{hours}h {minutes}m{bold}.')
+				return
+			resets[nick_lower] = time.time()
 			self.save_db()
+			self.sendmsg(chan, f'{c_nick(nick)} has requested a chip reset. {c_money(STARTING_CHIPS)} will be granted in {bold}24 hours{bold}.')
+			return
+
+		if nick_lower in resets:
+			remaining = RESET_COOLDOWN - (time.time() - resets[nick_lower])
+			if remaining > 0:
+				hours   = int(remaining // 3600)
+				minutes = int((remaining % 3600) // 60)
+				self.sendmsg(chan, f'{c_nick(nick)}: {c_money(chips)} chips. Reset pending in {bold}{hours}h {minutes}m{bold}.')
+			else:
+				self.sendmsg(chan, f'{c_nick(nick)}: reset processing momentarily.')
 			return
 
 		if chips <= 0:
-			last_reset = data.get('last_reset', 0)
-			if last_reset == 0:
-				data['chips']      = STARTING_CHIPS
-				data['last_reset'] = time.time()
-				self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
-				self.sendmsg(chan, f'{c_nick(nick)} has received a {c_money(STARTING_CHIPS)} chip reset!')
-			else:
-				elapsed = time.time() - last_reset
-				if elapsed >= RESET_COOLDOWN:
-					data['chips']      = STARTING_CHIPS
-					data['last_reset'] = time.time()
-					self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
-					self.sendmsg(chan, f'{c_nick(nick)} has received a {c_money(STARTING_CHIPS)} chip reset!')
-				else:
-					remaining = RESET_COOLDOWN - elapsed
-					hours     = int(remaining // 3600)
-					minutes   = int((remaining % 3600) // 60)
-					self.sendmsg(chan, f'{c_nick(nick)}: broke. Reset in {bold}{hours}h {minutes}m{bold}.')
+			self.sendmsg(chan, f'{c_nick(nick)}: broke. Use {c_cmd("!chips")} {c_arg("reset")} to request a new {c_money(STARTING_CHIPS)} bankroll (24h wait).')
 		else:
-			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips. Use {c_cmd("!chips")} {c_arg("reset")} to reset to {c_money(STARTING_CHIPS)}.')
+			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips. Use {c_cmd("!chips")} {c_arg("reset")} to request a reset to {c_money(STARTING_CHIPS)} (24h wait).')
 
 	def cmd_top(self, nick, chan):
 		if self.db is None:
@@ -790,10 +827,13 @@ class IRC:
 			return
 		leaderboard = []
 		for key, data in self.db.items():
+			if key.startswith('_'):
+				continue
 			if isinstance(data, dict) and 'chips' in data:
 				leaderboard.append((key, data['chips']))
 		leaderboard.sort(key=lambda x: x[1], reverse=True)
-		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", black, green)}{bold}')
+		house = self.house_chips()
+		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", black, green)}{bold} {sep} House: {c_money(house)}')
 		for i, (name, chips) in enumerate(leaderboard[:10], 1):
 			self.sendmsg(chan, f' {bold}#{i}{bold} {c_nick(name)} \u2014 {c_money(chips)}')
 
@@ -833,7 +873,13 @@ class IRC:
 			if self.state == 'lobby':
 				self._start_round(chan)
 
+	def _check_shuffle(self, chan):
+		if self.shoe.needs_shuffle or self.shoe.past_cut:
+			self.shoe.shuffle()
+			self.sendmsg(chan, f'{bold}{color(" SHUFFLING ALL CARDS ", black, yellow)}{bold}')
+
 	def _start_round(self, chan):
+		self._check_shuffle(chan)
 		self.state       = 'playing'
 		self.current_idx = 0
 		self.dealer_hand = []
@@ -905,6 +951,7 @@ class IRC:
 		for p in self.players:
 			if p.status == 'busted':
 				new_chips = self.add_chips(p.nick, -p.bet)
+				self.house_add(p.bet)
 				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} busted ({c_loss(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 			elif p.status == 'blackjack':
 				if dealer_bj:
@@ -913,18 +960,22 @@ class IRC:
 				else:
 					win = int(p.bet * 1.5)
 					new_chips = self.add_chips(p.nick, win)
+					self.house_add(-win)
 					self.sendmsg(chan, f' {color(sym_star, green)} {c_nick(p.nick)} {color("BLACKJACK", green)} ({color("+", green)}{c_money(win)}) {sym_arrow} {c_money(new_chips)}')
 			elif dealer_bust:
 				new_chips = self.add_chips(p.nick, p.bet)
+				self.house_add(-p.bet)
 				self.sendmsg(chan, f' {color(sym_check, green)} {c_nick(p.nick)} wins ({color("+", green)}{c_money(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 			elif p.total > dtotal:
 				new_chips = self.add_chips(p.nick, p.bet)
+				self.house_add(-p.bet)
 				self.sendmsg(chan, f' {color(sym_check, green)} {c_nick(p.nick)} wins {p.total} vs {dtotal} ({color("+", green)}{c_money(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 			elif p.total == dtotal:
 				chips = self.get_chips(p.nick)
 				self.sendmsg(chan, f' {color(sym_dash, yellow)} {c_nick(p.nick)} push {p.total} vs {dtotal} {sym_arrow} {c_money(chips)}')
 			else:
 				new_chips = self.add_chips(p.nick, -p.bet)
+				self.house_add(p.bet)
 				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses {p.total} vs {dtotal} ({c_loss(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 
 		if self.db is not None:
@@ -958,6 +1009,7 @@ class IRC:
 					self._pk_reset()
 
 	def _pk_start_hand(self, chan):
+		self._check_shuffle(chan)
 		self.pk_state       = 'playing'
 		self.pk_street      = 'preflop'
 		self.pk_community   = []
@@ -1242,6 +1294,8 @@ class IRC:
 				for i, p in enumerate(self.players):
 					if p.nick.lower() == nick.lower() and p.status == 'playing':
 						p.status = 'busted'
+						self.add_chips(p.nick, -p.bet)
+						self.house_add(p.bet)
 						self.sendmsg(chan, f'{c_nick(nick)} left \u2014 {c_loss(p.bet)} forfeited to the house.')
 						if i == self.current_idx:
 							self._next_player(chan)

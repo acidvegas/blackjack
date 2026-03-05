@@ -19,6 +19,7 @@ DB_SYNC_INTERVAL = 300
 RESET_COOLDOWN   = 86400
 SMALL_BLIND      = 5
 BIG_BLIND        = 10
+HOUSE_STARTING   = 10_000_000_000
 
 # --- Card Data ---
 SUITS = {
@@ -159,17 +160,27 @@ def poker_calculate_pots(players):
 # --- Classes ---
 
 class Shoe:
-	def __init__(self, num_decks=6):
-		self.num_decks = num_decks
-		self.cards     = []
+	def __init__(self, num_decks=6, penetration=0.75):
+		self.num_decks   = num_decks
+		self.penetration = penetration
+		self.cards       = []
+		self.cut_pos     = 0
+		self.needs_shuffle = True
 		self.shuffle()
 
 	def shuffle(self):
 		self.cards = [(rank, suit) for _ in range(self.num_decks) for suit in SUITS for rank in RANKS]
 		random.shuffle(self.cards)
+		self.cut_pos = int(len(self.cards) * self.penetration)
+		self.needs_shuffle = False
+
+	@property
+	def past_cut(self):
+		dealt = (self.num_decks * 52) - len(self.cards)
+		return dealt >= self.cut_pos
 
 	def draw(self):
-		if len(self.cards) < 30:
+		if not self.cards:
 			self.shuffle()
 		return self.cards.pop()
 
