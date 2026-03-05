@@ -200,20 +200,25 @@ class IRC:
 		self.sendmsg('NickServ', f'IDENTIFY {username} {password}')
 
 	def listen(self):
+		buf = b''
 		while True:
 			try:
-				data = self.sock.recv(4096).decode('utf-8')
-				if data:
-					for line in (l for l in data.split('\r\n') if l):
-						if line.startswith('ERROR :Closing Link:'):
-							raise Exception('Connection has closed.')
-						elif len(line.split()) >= 2:
-							self.handle_events(line)
-				else:
+				chunk = self.sock.recv(4096)
+				if not chunk:
 					_log('[!] No data received from server.')
 					break
-			except (UnicodeDecodeError, UnicodeEncodeError):
-				_log('[!] Unicode error occurred.')
+				buf += chunk
+				while b'\r\n' in buf:
+					line_bytes, buf = buf.split(b'\r\n', 1)
+					try:
+						line = line_bytes.decode('utf-8')
+					except UnicodeDecodeError:
+						line = line_bytes.decode('latin-1')
+					if not line or len(line.split()) < 2:
+						continue
+					if line.startswith('ERROR :Closing Link:'):
+						raise Exception('Connection has closed.')
+					self.handle_events(line)
 			except Exception as ex:
 				_log(f'[!] Unexpected error: {ex}')
 				traceback.print_exc()
