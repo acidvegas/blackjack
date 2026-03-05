@@ -312,7 +312,7 @@ class IRC:
 				if self.state == 'lobby':         self.cmd_deal(nick, chan)
 				elif self.pk_state == 'lobby':    self.cmd_pk_deal(nick, chan)
 			elif cmd == '!leave':                 self.cmd_leave(nick, chan)
-			elif cmd == '!chips':                 self.cmd_chips(nick, chan)
+			elif cmd == '!chips':                 self.cmd_chips(nick, chan, parts[1:])
 			elif cmd == '!top':                   self.cmd_top(nick, chan)
 			elif cmd == '!help':                  self.cmd_help(nick, chan)
 			elif cmd == '!mini':                  self.cmd_mini(nick, chan)
@@ -738,20 +738,40 @@ class IRC:
 						self._pk_reset()
 						self.sendmsg(chan, 'Poker table closed.')
 
-	def cmd_chips(self, nick, chan):
+	def cmd_chips(self, nick, chan, args=None):
 		data  = self.get_player_data(nick)
 		chips = data['chips']
+
+		if args and args[0].lower() == 'reset':
+			last_reset = data.get('last_reset', 0)
+			if last_reset > 0:
+				elapsed = time.time() - last_reset
+				if elapsed < RESET_COOLDOWN:
+					remaining = RESET_COOLDOWN - elapsed
+					hours     = int(remaining // 3600)
+					minutes   = int((remaining % 3600) // 60)
+					self.sendmsg(chan, f'{c_nick(nick)}: reset on cooldown. Try again in {bold}{hours}h {minutes}m{bold}.')
+					return
+			data['chips']      = STARTING_CHIPS
+			data['last_reset'] = time.time()
+			self.set_player_data(nick, data)
+			self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
+			self.sendmsg(chan, f'{c_nick(nick)} has reset their chips to {c_money(STARTING_CHIPS)}!')
+			return
+
 		if chips <= 0:
 			last_reset = data.get('last_reset', 0)
 			if last_reset == 0:
+				data['chips']      = STARTING_CHIPS
 				data['last_reset'] = time.time()
 				self.set_player_data(nick, data)
-				self.sendmsg(chan, f'{c_nick(nick)}: you are broke. Chip reset available in {bold}24h{bold}.')
+				self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
+				self.sendmsg(chan, f'{c_nick(nick)} has received a {c_money(STARTING_CHIPS)} chip reset!')
 			else:
 				elapsed = time.time() - last_reset
 				if elapsed >= RESET_COOLDOWN:
 					data['chips']      = STARTING_CHIPS
-					data['last_reset'] = 0
+					data['last_reset'] = time.time()
 					self.set_player_data(nick, data)
 					self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
 					self.sendmsg(chan, f'{c_nick(nick)} has received a {c_money(STARTING_CHIPS)} chip reset!')
@@ -761,7 +781,7 @@ class IRC:
 					minutes   = int((remaining % 3600) // 60)
 					self.sendmsg(chan, f'{c_nick(nick)}: broke. Reset in {bold}{hours}h {minutes}m{bold}.')
 		else:
-			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips.')
+			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips. Use {c_cmd("!chips")} {c_arg("reset")} to reset to {c_money(STARTING_CHIPS)}.')
 
 	def cmd_top(self, nick, chan):
 		all_keys = self.db.all()
@@ -1210,7 +1230,7 @@ class IRC:
 				for i, p in enumerate(self.players):
 					if p.nick.lower() == nick.lower() and p.status == 'playing':
 						p.status = 'busted'
-						self.sendmsg(chan, f'{c_nick(nick)} left \u2014 hand forfeited.')
+						self.sendmsg(chan, f'{c_nick(nick)} left \u2014 {c_loss(p.bet)} forfeited to the house.')
 						if i == self.current_idx:
 							self._next_player(chan)
 						break
@@ -1229,7 +1249,10 @@ class IRC:
 				for i, p in enumerate(self.pk_players):
 					if p.nick.lower() == nick.lower() and not p.folded:
 						p.folded = True
-						self.sendmsg(chan, f'{c_nick(nick)} left \u2014 poker hand folded.')
+						if p.total_bet > 0:
+							self.sendmsg(chan, f'{c_nick(nick)} left \u2014 poker hand folded, {c_loss(p.total_bet)} forfeited to the pot.')
+						else:
+							self.sendmsg(chan, f'{c_nick(nick)} left \u2014 poker hand folded.')
 						active = [pp for pp in self.pk_players if not pp.folded]
 						if len(active) == 1:
 							self._pk_win_by_fold(chan, active[0])
