@@ -178,6 +178,7 @@ class IRC:
 
 	def raw(self, msg):
 		self.sock.send(bytes(msg + '\r\n', 'utf-8'))
+		time.sleep(0.05)
 
 	def sendmsg(self, target, msg):
 		self.raw(f'PRIVMSG {target} :{msg}')
@@ -592,8 +593,7 @@ class IRC:
 				return
 			current.folded = True
 			current.acted  = True
-			self.sendmsg(chan, f'{c_nick(current.nick)} folds.')
-			self._pk_after_action(chan)
+			self._pk_after_action(chan, f'{c_nick(current.nick)} folds.')
 
 	def cmd_check(self, nick, chan):
 		with self.lock:
@@ -607,8 +607,7 @@ class IRC:
 				self.sendmsg(chan, f'{color("ERROR", red)} Cannot check \u2014 {c_money(to_call)} to call. Use {c_cmd("!call")}, {c_cmd("!raise")}, or {c_cmd("!fold")}.')
 				return
 			current.acted = True
-			self.sendmsg(chan, f'{c_nick(current.nick)} checks.')
-			self._pk_after_action(chan)
+			self._pk_after_action(chan, f'{c_nick(current.nick)} checks.')
 
 	def cmd_call(self, nick, chan):
 		with self.lock:
@@ -633,10 +632,10 @@ class IRC:
 
 			pot = sum(p.total_bet for p in self.pk_players)
 			if current.all_in:
-				self.sendmsg(chan, f'{c_nick(current.nick)} calls all-in {c_money(to_call)} (Pot: {c_money(pot)})')
+				msg = f'{c_nick(current.nick)} calls all-in {c_money(to_call)} (Pot: {c_money(pot)})'
 			else:
-				self.sendmsg(chan, f'{c_nick(current.nick)} calls {c_money(to_call)} (Pot: {c_money(pot)})')
-			self._pk_after_action(chan)
+				msg = f'{c_nick(current.nick)} calls {c_money(to_call)} (Pot: {c_money(pot)})'
+			self._pk_after_action(chan, msg)
 
 	def cmd_raise(self, nick, chan, args):
 		with self.lock:
@@ -677,8 +676,7 @@ class IRC:
 					p.acted = False
 
 			pot = sum(p.total_bet for p in self.pk_players)
-			self.sendmsg(chan, f'{c_nick(current.nick)} raises to {c_money(raise_to)} (Pot: {c_money(pot)})')
-			self._pk_after_action(chan)
+			self._pk_after_action(chan, f'{c_nick(current.nick)} raises to {c_money(raise_to)} (Pot: {c_money(pot)})')
 
 	def cmd_allin(self, nick, chan):
 		with self.lock:
@@ -709,8 +707,7 @@ class IRC:
 				self.pk_current_bet = allin_total
 
 			pot = sum(p.total_bet for p in self.pk_players)
-			self.sendmsg(chan, f'{c_nick(current.nick)} goes ALL-IN for {c_money(available)}! (Pot: {c_money(pot)})')
-			self._pk_after_action(chan)
+			self._pk_after_action(chan, f'{c_nick(current.nick)} goes ALL-IN for {c_money(available)}! (Pot: {c_money(pot)})')
 
 	# ──────────────────── Shared Commands ────────────────────
 
@@ -1028,23 +1025,31 @@ class IRC:
 
 		self._pk_prompt(chan)
 
-	def _pk_prompt(self, chan):
+	def _pk_prompt(self, chan, prefix=None):
 		p = self.pk_players[self.pk_current_idx]
 		pot = sum(pp.total_bet for pp in self.pk_players)
 		to_call = self.pk_current_bet - p.bet
 		self.pk_last_move = time.time()
 		if to_call > 0:
-			self.sendmsg(chan, f'Pot: {c_money(pot)} | {c_nick(p.nick)}: {c_cmd("!call")} {c_money(to_call)}, {c_cmd("!raise")} {c_arg("<total>")}, {c_cmd("!fold")}, or {c_cmd("!allin")}')
+			prompt = f'Pot: {c_money(pot)} | {c_nick(p.nick)}: {c_cmd("!call")} {c_money(to_call)}, {c_cmd("!raise")} {c_arg("<total>")}, {c_cmd("!fold")}, or {c_cmd("!allin")}'
 		else:
-			self.sendmsg(chan, f'Pot: {c_money(pot)} | {c_nick(p.nick)}: {c_cmd("!check")}, {c_cmd("!raise")} {c_arg("<total>")}, or {c_cmd("!fold")}')
+			prompt = f'Pot: {c_money(pot)} | {c_nick(p.nick)}: {c_cmd("!check")}, {c_cmd("!raise")} {c_arg("<total>")}, or {c_cmd("!fold")}'
+		if prefix:
+			self.sendmsg(chan, f'{prefix} | {prompt}')
+		else:
+			self.sendmsg(chan, prompt)
 
-	def _pk_after_action(self, chan):
+	def _pk_after_action(self, chan, prefix=None):
 		active = [p for p in self.pk_players if not p.folded]
 		if len(active) == 1:
+			if prefix:
+				self.sendmsg(chan, prefix)
 			self._pk_win_by_fold(chan, active[0])
 			return
 
 		if self._pk_round_complete():
+			if prefix:
+				self.sendmsg(chan, prefix)
 			self._pk_next_street(chan)
 			return
 
@@ -1054,9 +1059,11 @@ class IRC:
 			p = self.pk_players[idx]
 			if not p.folded and not p.all_in and not p.acted:
 				self.pk_current_idx = idx
-				self._pk_prompt(chan)
+				self._pk_prompt(chan, prefix)
 				return
 
+		if prefix:
+			self.sendmsg(chan, prefix)
 		self._pk_next_street(chan)
 
 	def _pk_round_complete(self):
