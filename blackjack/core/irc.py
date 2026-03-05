@@ -46,6 +46,7 @@ sym_check = '\u2713'
 sym_cross = '\u2717'
 sym_dash  = '\u2500'
 sym_star  = '\u2605'
+sep       = f'\x03{grey}|\x0f'
 
 BJ_HEADER    = " \u2660 \u2764  BLACKJACK  \u2666 \u2663 "
 POKER_HEADER = " \u2660 \u2764  TEXAS HOLD'EM  \u2666 \u2663 "
@@ -373,6 +374,8 @@ class IRC:
 		return data
 
 	def set_player_data(self, nick, data):
+		if not self.db:
+			return
 		self.db.set(nick.lower(), data)
 
 	def get_chips(self, nick):
@@ -793,12 +796,12 @@ class IRC:
 		self.sendmsg(chan, f'{bold}{color(" COMMANDS ", black, green)}{bold}')
 		self.sendmsg(chan, f' {bold}\u2500\u2500 Blackjack \u2500\u2500{bold}')
 		self.sendmsg(chan, f' {c_cmd("!blackjack")} {c_arg("[bet]")} \u2014 Start or join (default: {c_money(DEFAULT_BET)})')
-		self.sendmsg(chan, f' {c_cmd("!hit")} \u2014 Draw a card  |  {c_cmd("!stand")} \u2014 Keep hand  |  {c_cmd("!double")} \u2014 Double down')
+		self.sendmsg(chan, f' {c_cmd("!hit")} \u2014 Draw a card  {sep}  {c_cmd("!stand")} \u2014 Keep hand  {sep}  {c_cmd("!double")} \u2014 Double down')
 		self.sendmsg(chan, f' {bold}\u2500\u2500 Poker \u2500\u2500{bold}')
 		self.sendmsg(chan, f' {c_cmd("!poker")} \u2014 Start or join a table (blinds {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)})')
-		self.sendmsg(chan, f' {c_cmd("!check")} | {c_cmd("!call")} | {c_cmd("!raise")} {c_arg("<amt>")} | {c_cmd("!fold")} | {c_cmd("!allin")}')
+		self.sendmsg(chan, f' {c_cmd("!check")} {sep} {c_cmd("!call")} {sep} {c_cmd("!raise")} {c_arg("<amt>")} {sep} {c_cmd("!fold")} {sep} {c_cmd("!allin")}')
 		self.sendmsg(chan, f' {bold}\u2500\u2500 General \u2500\u2500{bold}')
-		self.sendmsg(chan, f' {c_cmd("!deal")} \u2014 Force deal  |  {c_cmd("!leave")} \u2014 Leave lobby  |  {c_cmd("!chips")} \u2014 Check/reset chips  |  {c_cmd("!top")} \u2014 Leaderboard  |  {c_cmd("!mini")} \u2014 Toggle compact cards  |  {c_cmd("!cheat")} \u2014 Peek at hidden cards')
+		self.sendmsg(chan, f' {c_cmd("!deal")} \u2014 Force deal  {sep}  {c_cmd("!leave")} \u2014 Leave lobby  {sep}  {c_cmd("!chips")} \u2014 Check/reset chips  {sep}  {c_cmd("!top")} \u2014 Leaderboard  {sep}  {c_cmd("!mini")} \u2014 Toggle compact cards  {sep}  {c_cmd("!cheat")} \u2014 Cheat sheet')
 
 	def cmd_mini(self, nick, chan):
 		self.mini_mode = not self.mini_mode
@@ -1028,11 +1031,11 @@ class IRC:
 		to_call = self.pk_current_bet - p.bet
 		self.pk_last_move = time.time()
 		if to_call > 0:
-			prompt = f'Pot: {c_money(pot)} | {c_nick(p.nick)}: {c_cmd("!call")} {c_money(to_call)}, {c_cmd("!raise")} {c_arg("<total>")}, {c_cmd("!fold")}, or {c_cmd("!allin")}'
+			prompt = f'Pot: {c_money(pot)} {sep} {c_nick(p.nick)}: {c_cmd("!call")} {c_money(to_call)}, {c_cmd("!raise")} {c_arg("<total>")}, {c_cmd("!fold")}, or {c_cmd("!allin")}'
 		else:
-			prompt = f'Pot: {c_money(pot)} | {c_nick(p.nick)}: {c_cmd("!check")}, {c_cmd("!raise")} {c_arg("<total>")}, or {c_cmd("!fold")}'
+			prompt = f'Pot: {c_money(pot)} {sep} {c_nick(p.nick)}: {c_cmd("!check")}, {c_cmd("!raise")} {c_arg("<total>")}, or {c_cmd("!fold")}'
 		if prefix:
-			self.sendmsg(chan, f'{prefix} | {prompt}')
+			self.sendmsg(chan, f'{prefix} {sep} {prompt}')
 		else:
 			self.sendmsg(chan, prompt)
 
