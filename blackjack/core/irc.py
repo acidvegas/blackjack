@@ -13,7 +13,7 @@ import config
 import debug
 
 try:
-	import pickledb
+	from pickledb import PickleDB
 except ImportError:
 	raise SystemExit('pickledb is required: pip install pickledb')
 
@@ -227,7 +227,7 @@ class IRC:
 
 	def event_disconnect(self):
 		if self.db:
-			self.db.dump()
+			self.db.save()
 		self.sock.close()
 		self.reset_game()
 		time.sleep(10)
@@ -266,9 +266,10 @@ class IRC:
 	# --- Database ---
 
 	def load_db(self):
-		db_path = os.path.join('data', 'chips.db')
+		db_path = os.path.join('data', 'chips.json')
 		os.makedirs('data', exist_ok=True)
-		self.db = pickledb.load(db_path, False)
+		self.db = PickleDB(db_path)
+		self.db.load()
 		threading.Thread(target=self._db_sync_loop, daemon=True).start()
 		debug.irc('Chip database loaded.')
 
@@ -276,16 +277,16 @@ class IRC:
 		while True:
 			time.sleep(DB_SYNC_INTERVAL)
 			if self.db:
-				self.db.dump()
+				self.db.save()
 				debug.irc('Database synced to disk.')
 
 	def get_player_data(self, nick):
-		key = nick.lower()
-		if not self.db.exists(key):
+		key  = nick.lower()
+		data = self.db.get(key)
+		if data is None:
 			data = {'chips': STARTING_CHIPS, 'last_reset': 0}
 			self.db.set(key, data)
-			return data
-		return self.db.get(key)
+		return data
 
 	def set_player_data(self, nick, data):
 		self.db.set(nick.lower(), data)
@@ -435,7 +436,7 @@ class IRC:
 			self.sendmsg(chan, f'{nick} has {bold}${chips:,}{bold} in chips.')
 
 	def cmd_top(self, nick, chan):
-		all_keys = self.db.getall()
+		all_keys = self.db.all()
 		if not all_keys:
 			self.sendmsg(chan, 'No players registered yet.')
 			return
@@ -555,7 +556,7 @@ class IRC:
 				self.sendmsg(chan, f' {color(sym_cross, red)} {bold}{p.nick}{bold} loses {p.total} vs {dtotal} ({bold}-${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
 
 		if self.db:
-			self.db.dump()
+			self.db.save()
 
 		self.reset_game()
 
