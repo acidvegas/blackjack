@@ -2,6 +2,7 @@
 # BlackJack IRC Bot - Developed by acidvegas in Python (https://acid.vegas/blackjack)
 # irc.py
 
+import json
 import os
 import socket
 import ssl
@@ -10,11 +11,6 @@ import time
 import traceback
 
 import config
-
-try:
-	from pickledb import PickleDB
-except ImportError:
-	raise SystemExit('pickledb is required: pip install pickledb')
 
 from cards import (
 	NUM_DECKS, MAX_PLAYERS, DEFAULT_BET, MIN_BET, MAX_BET, STARTING_CHIPS,
@@ -270,8 +266,8 @@ class IRC:
 		self.chan = config.connection.channel
 
 	def event_disconnect(self):
-		if self.db:
-			self.db.save()
+		if self.db is not None:
+			self.save_db()
 		self.sock.close()
 		self.reset_game()
 		self._pk_reset()
@@ -346,46 +342,41 @@ class IRC:
 	# ──────────────────── Database ────────────────────
 
 	def load_db(self):
-		db_path = os.path.join('data', 'chips.json')
+		self.db_path = os.path.join('data', 'chips.json')
 		os.makedirs('data', exist_ok=True)
-		try:
-			self.db = PickleDB(db_path)
-			self.db.load()
-			_log('Chip database loaded.')
-		except Exception as ex:
-			_log(f'[!] Database load failed ({ex}), creating fresh.')
-			traceback.print_exc()
+		if os.path.exists(self.db_path):
 			try:
-				self.db = PickleDB(db_path)
-				self.db.save()
-				_log('Fresh database created.')
-			except Exception as ex2:
-				_log(f'[!] Could not create database: {ex2}')
+				with open(self.db_path, 'r') as f:
+					self.db = json.load(f)
+				_log(f'Chip database loaded ({len(self.db)} players).')
+			except Exception as ex:
+				_log(f'[!] Database load failed ({ex}), starting fresh.')
 				traceback.print_exc()
-				self.db = None
-		if self.db:
-			threading.Thread(target=self._db_sync_loop, daemon=True).start()
+				self.db = {}
+		else:
+			self.db = {}
+			_log('No database found, starting fresh.')
+		self.save_db()
+		threading.Thread(target=self._db_sync_loop, daemon=True).start()
+
+	def save_db(self):
+		try:
+			with open(self.db_path, 'w') as f:
+				json.dump(self.db, f, indent=2)
+		except Exception as ex:
+			_log(f'[!] Database save failed: {ex}')
+			traceback.print_exc()
 
 	def _db_sync_loop(self):
 		while True:
 			time.sleep(DB_SYNC_INTERVAL)
-			if self.db:
-				self.db.save()
+			self.save_db()
 
 	def get_player_data(self, nick):
-		if not self.db:
-			return {'chips': STARTING_CHIPS, 'last_reset': 0}
-		key  = nick.lower()
-		data = self.db.get(key)
-		if data is None:
-			data = {'chips': STARTING_CHIPS, 'last_reset': 0}
-			self.db.set(key, data)
-		return data
-
-	def set_player_data(self, nick, data):
-		if not self.db:
-			return
-		self.db.set(nick.lower(), data)
+		key = nick.lower()
+		if key not in self.db:
+			self.db[key] = {'chips': STARTING_CHIPS, 'last_reset': 0}
+		return self.db[key]
 
 	def get_chips(self, nick):
 		return self.get_player_data(nick)['chips']
@@ -395,7 +386,6 @@ class IRC:
 		data['chips'] = max(0, data['chips'] + amount)
 		if data['chips'] == 0:
 			data['last_reset'] = time.time()
-		self.set_player_data(nick, data)
 		return data['chips']
 
 	# ──────────────────── Blackjack Commands ────────────────────
@@ -757,9 +747,9 @@ class IRC:
 					return
 			data['chips']      = STARTING_CHIPS
 			data['last_reset'] = time.time()
-			self.set_player_data(nick, data)
 			self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
 			self.sendmsg(chan, f'{c_nick(nick)} has reset their chips to {c_money(STARTING_CHIPS)}!')
+			self.save_db()
 			return
 
 		if chips <= 0:
@@ -767,7 +757,6 @@ class IRC:
 			if last_reset == 0:
 				data['chips']      = STARTING_CHIPS
 				data['last_reset'] = time.time()
-				self.set_player_data(nick, data)
 				self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
 				self.sendmsg(chan, f'{c_nick(nick)} has received a {c_money(STARTING_CHIPS)} chip reset!')
 			else:
@@ -775,7 +764,6 @@ class IRC:
 				if elapsed >= RESET_COOLDOWN:
 					data['chips']      = STARTING_CHIPS
 					data['last_reset'] = time.time()
-					self.set_player_data(nick, data)
 					self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
 					self.sendmsg(chan, f'{c_nick(nick)} has received a {c_money(STARTING_CHIPS)} chip reset!')
 				else:
@@ -787,16 +775,14 @@ class IRC:
 			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips. Use {c_cmd("!chips")} {c_arg("reset")} to reset to {c_money(STARTING_CHIPS)}.')
 
 	def cmd_top(self, nick, chan):
-		if not self.db:
+		if self.db is None:
 			self.sendmsg(chan, f'{color("ERROR", red)} Database not loaded.')
 			return
-		all_keys = self.db.all()
-		if not all_keys:
+		if not self.db:
 			self.sendmsg(chan, 'No players registered yet.')
 			return
 		leaderboard = []
-		for key in all_keys:
-			data = self.db.get(key)
+		for key, data in self.db.items():
 			if isinstance(data, dict) and 'chips' in data:
 				leaderboard.append((key, data['chips']))
 		leaderboard.sort(key=lambda x: x[1], reverse=True)
@@ -934,8 +920,8 @@ class IRC:
 				new_chips = self.add_chips(p.nick, -p.bet)
 				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses {p.total} vs {dtotal} ({c_loss(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 
-		if self.db:
-			self.db.save()
+		if self.db is not None:
+			self.save_db()
 		self.reset_game()
 
 	def _move_timer(self, chan):
@@ -1187,8 +1173,8 @@ class IRC:
 			else:
 				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses ({c_loss(abs(net))}) {sym_arrow} {c_money(new_chips)}')
 
-		if self.db:
-			self.db.save()
+		if self.db is not None:
+			self.save_db()
 		self._pk_reset()
 
 	def _pk_win_by_fold(self, chan, winner):
@@ -1203,8 +1189,8 @@ class IRC:
 			if net != 0:
 				self.add_chips(p.nick, net)
 
-		if self.db:
-			self.db.save()
+		if self.db is not None:
+			self.save_db()
 		self._pk_reset()
 
 	def _pk_move_timer(self, chan):
