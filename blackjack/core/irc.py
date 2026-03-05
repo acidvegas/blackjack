@@ -2,7 +2,6 @@
 # BlackJack IRC Bot - Developed by acidvegas in Python (https://acid.vegas/blackjack)
 # irc.py
 
-import inspect
 import os
 import random
 import socket
@@ -13,76 +12,115 @@ import time
 import config
 import debug
 
-# Data Directories & Files (DO NOT EDIT)
-data_dir   = os.path.join(os.path.dirname(os.path.realpath(inspect.stack()[-1][1])), 'data')
-cheat_file = os.path.join(data_dir, 'cheat.txt')
-help_file  = os.path.join(data_dir, 'help.txt')
+try:
+	import pickledb
+except ImportError:
+	raise SystemExit('pickledb is required: pip install pickledb')
 
-# Card Types
-club	= ('♣','clubs')
-diamond = ('♦','diamonds')
-heart   = ('♥','hearts')
-spade   = ('♠','spades')
+NUM_DECKS        = 6
+MAX_PLAYERS      = 7
+DEFAULT_BET      = 100
+MIN_BET          = 10
+MAX_BET          = 50000
+STARTING_CHIPS   = 1000
+MOVE_TIMEOUT     = 300
+LOBBY_TIMEOUT    = 30
+DB_SYNC_INTERVAL = 300
+RESET_COOLDOWN   = 86400
 
-# Deck Table (Name, ASCII, Value, Remaining Suits)
-deck = {
-	'ace'   : [None, 11, [club,diamond,heart,spade]],
-	'two'   : [None, 2,  [club,diamond,heart,spade]],
-	'three' : [None, 3,  [club,diamond,heart,spade]],
-	'four'  : [None, 4,  [club,diamond,heart,spade]],
-	'five'  : [None, 5,  [club,diamond,heart,spade]],
-	'six'   : [None, 6,  [club,diamond,heart,spade]],
-	'seven' : [None, 7,  [club,diamond,heart,spade]],
-	'eight' : [None, 8,  [club,diamond,heart,spade]],
-	'nine'  : [None, 9,  [club,diamond,heart,spade]],
-	'ten'   : [None, 10, [club,diamond,heart,spade]],
-	'jack'  : [None, 10, [club,diamond,heart,spade]],
-	'queen' : [None, 10, [club,diamond,heart,spade]],
-	'king'  : [None, 10, [club,diamond,heart,spade]]
+SUITS = {
+	'hearts'   : ('♥', True),
+	'diamonds' : ('♦', True),
+	'clubs'    : ('♣', False),
+	'spades'   : ('♠', False),
 }
+RANKS       = ['A','2','3','4','5','6','7','8','9','10','J','Q','K']
+RANK_VALUES = {'A':11, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':10, 'Q':10, 'K':10}
 
-# Formatting Control Characters / Color Codes
-bold        = '\x02'
-italic      = '\x1D'
-underline   = '\x1F'
-reverse     = '\x16'
-reset       = '\x0f'
-white       = '00'
-black       = '01'
-blue        = '02'
-green       = '03'
-red         = '04'
-brown       = '05'
-purple      = '06'
-orange      = '07'
-yellow      = '08'
-light_green = '09'
-cyan        = '10'
-light_cyan  = '11'
-light_blue  = '12'
-pink        = '13'
-grey        = '14'
-light_grey  = '15'
+bold      = '\x02'
+reset     = '\x0f'
+white     = '00'
+black     = '01'
+green     = '03'
+red       = '04'
+orange    = '07'
+yellow    = '08'
+light_blue = '12'
+grey      = '14'
+
 
 def color(msg, foreground, background=None):
 	if background:
-		return '\x03{0},{1}{2}{3}'.format(foreground, background, msg, reset)
-	else:
-		return '\x03{0}{1}{2}'.format(foreground, msg, reset)
+		return f'\x03{foreground},{background}{msg}{reset}'
+	return f'\x03{foreground}{msg}{reset}'
 
-class IRC(object):
+
+def hand_value(cards):
+	total = sum(RANK_VALUES[rank] for rank, _ in cards)
+	aces  = sum(1 for rank, _ in cards if rank == 'A')
+	while total > 21 and aces:
+		total -= 10
+		aces  -= 1
+	return total
+
+
+def format_card(rank, suit):
+	sym, is_red = SUITS[suit]
+	return color(f'{rank}{sym}', red if is_red else black, white)
+
+
+def format_hand(cards, hide_first=False):
+	if hide_first and len(cards) > 1:
+		return color('[??]', grey, white) + ' ' + ' '.join(format_card(r, s) for r, s in cards[1:])
+	return ' '.join(format_card(r, s) for r, s in cards)
+
+
+class Shoe:
+	def __init__(self, num_decks=6):
+		self.num_decks = num_decks
+		self.cards     = []
+		self.shuffle()
+
+	def shuffle(self):
+		self.cards = [(rank, suit) for _ in range(self.num_decks) for suit in SUITS for rank in RANKS]
+		random.shuffle(self.cards)
+
+	def draw(self):
+		if len(self.cards) < 30:
+			self.shuffle()
+		return self.cards.pop()
+
+
+class Player:
+	def __init__(self, nick, bet):
+		self.nick   = nick
+		self.bet    = bet
+		self.hand   = []
+		self.status = 'playing'
+
+	@property
+	def total(self):
+		return hand_value(self.hand)
+
+	@property
+	def is_blackjack(self):
+		return len(self.hand) == 2 and self.total == 21
+
+
+class IRC:
 	def __init__(self):
-		self.ace_minus = False
-		self.hand      = None
-		self.last_move = 0
-		self.last_time = 0
-		self.player    = None
-		self.total     = 0
-		self.mini_deck = False
-		self.sock       = None
+		self.sock        = None
+		self.db          = None
+		self.shoe        = Shoe(NUM_DECKS)
+		self.state       = 'idle'
+		self.players     = []
+		self.dealer_hand = []
+		self.current_idx = 0
+		self.last_move   = 0
+		self.lobby_timer = None
+		self.lock        = threading.Lock()
 
-	def action(self, chan, msg):
-		self.sendmsg(chan, '\x01ACTION {0}\x01'.format(msg))
+	# --- IRC Protocol ---
 
 	def connect(self):
 		try:
@@ -90,7 +128,7 @@ class IRC(object):
 			self.sock.connect((config.connection.server, config.connection.port))
 			if config.login.network:
 				self.raw('PASS ' + config.login.network)
-			self.raw('USER {0} 0 * :{1}'.format(config.ident.username, config.ident.realname))
+			self.raw(f'USER {config.ident.username} 0 * :{config.ident.realname}')
 			self.raw('NICK ' + config.ident.nickname)
 		except socket.error as ex:
 			debug.error('Failed to connect to IRC server.', ex)
@@ -99,57 +137,94 @@ class IRC(object):
 			self.listen()
 
 	def create_socket(self):
-		family	= socket.AF_INET6 if config.connection.ipv6 else socket.AF_INET
+		family    = socket.AF_INET6 if config.connection.ipv6 else socket.AF_INET
 		self.sock = socket.socket(family, socket.SOCK_STREAM)
 		if config.connection.vhost:
 			self.sock.bind((config.connection.vhost, 0))
 		if config.connection.ssl:
-			self.sock = ssl.wrap_socket(self.sock)
+			ctx = ssl.create_default_context()
+			if not config.connection.ssl_verify:
+				ctx.check_hostname = False
+				ctx.verify_mode    = ssl.CERT_NONE
+			if config.cert.file:
+				ctx.load_cert_chain(config.cert.file, config.cert.key, config.cert.password)
+			self.sock = ctx.wrap_socket(self.sock, server_hostname=config.connection.server)
 
-	def draw(self):
-		card_type = random.choice(list(deck.keys()))
-		remaining = deck[card_type][2]
-		while not remaining:
-			card_type = random.choice(list(deck.keys()))
-			remaining = deck[card_type][2]
-		card_suit = random.choice(remaining)
-		if card_suit in (heart,diamond):
-			card_color = red
-		else:
-			card_color = black
-		card_value = deck[card_type][1]
-		if self.mini_deck:
-			card = deck[card_type][0].replace('X', card_suit[0])
-			card = color(card, card_color, white)
-			self.hand.append(card)
-		else:
-			for i in range(5):
-				card = deck[card_type][0][i].replace('X', card_suit[0])
-				card = color(card, card_color, white)
-				self.hand[i].append(card)
-		deck[card_type][2].remove(card_suit)
-		self.total += card_value
-		if card_type == 'ace' and deck['ace'][1] != 1:
-			deck['ace'][1] = 1
-		return (card_type, card_suit)
+	def raw(self, msg):
+		self.sock.send(bytes(msg + '\r\n', 'utf-8'))
 
-	def error(self, chan, msg, reason=None):
-		if reason:
-			self.sendmsg(chan, '[{0}] {1} {2}'.format(color('ERROR', red), msg, color('({0})'.format(str(reason)), grey)))
-		else:
-			self.sendmsg(chan, '[{0}] {1}'.format(color('ERROR', red), msg))
+	def sendmsg(self, target, msg):
+		self.raw(f'PRIVMSG {target} :{msg}')
+		time.sleep(0.4)
+
+	def action(self, chan, msg):
+		self.sendmsg(chan, f'\x01ACTION {msg}\x01')
+
+	def join(self, chan, key=None):
+		self.raw(f'JOIN {chan} {key}') if key else self.raw(f'JOIN {chan}')
+
+	def identify(self, username, password):
+		self.sendmsg('NickServ', f'IDENTIFY {username} {password}')
+
+	def listen(self):
+		while True:
+			try:
+				data = self.sock.recv(4096).decode('utf-8')
+				if data:
+					for line in (l for l in data.split('\r\n') if l):
+						debug.irc(line)
+						if line.startswith('ERROR :Closing Link:'):
+							raise Exception('Connection has closed.')
+						elif len(line.split()) >= 2:
+							self.handle_events(line)
+				else:
+					debug.error('No data received from server.')
+					break
+			except (UnicodeDecodeError, UnicodeEncodeError):
+				debug.error('Unicode error occurred.')
+			except Exception as ex:
+				debug.error('Unexpected error occurred.', ex)
+				break
+		self.event_disconnect()
+
+	def handle_events(self, data):
+		args = data.split()
+		if args[0] == 'PING':
+			self.raw('PONG ' + args[1][1:])
+		elif args[1] == '001':
+			self.event_connect()
+		elif args[1] == '433':
+			debug.error_exit('Nickname is already in use.')
+		elif args[1] in ('KICK', 'PART', 'PRIVMSG', 'QUIT'):
+			nick = args[0].split('!')[0][1:]
+			if nick != config.ident.nickname:
+				if args[1] == 'KICK':
+					self.event_kick(nick, args[2], args[3])
+				elif args[1] == 'PART':
+					self.event_part(nick, args[2])
+				elif args[1] == 'PRIVMSG':
+					chan = args[2]
+					msg  = data.split(f'{args[0]} PRIVMSG {chan} :')[1]
+					if chan != config.ident.nickname:
+						self.event_message(nick, chan, msg)
+				elif args[1] == 'QUIT':
+					self.event_quit(nick)
+
+	# --- Events ---
 
 	def event_connect(self):
-		self.setup_deck('normal')
+		self.load_db()
 		if config.login.nickserv:
-			self.identify(self.username, config.login.nickserv)
+			self.identify(config.ident.username, config.login.nickserv)
 		if config.login.operator:
-			self.oper(config.ident.username, config.login.operator)
+			self.raw(f'OPER {config.ident.username} {config.login.operator}')
 		self.join(config.connection.channel, config.connection.key)
 
 	def event_disconnect(self):
+		if self.db:
+			self.db.dump()
 		self.sock.close()
-		self.reset()
+		self.reset_game()
 		time.sleep(10)
 		self.connect()
 
@@ -157,242 +232,370 @@ class IRC(object):
 		if kicked == config.ident.nickname and chan == config.connection.channel:
 			time.sleep(3)
 			self.join(config.connection.channel, config.connection.key)
-
-	def event_message(self, nick, chan, msg):
-		if chan == config.connection.channel:
-			if not msg.startswith('.'):
-				if msg == '@help':
-					self.action(chan, 'Sending help in a private message...')
-					help = [line.strip() for line in open(help_file).readlines() if line]
-					for line in help:
-						self.sendmsg(chan, line)
-				elif msg == '@cheat':
-					self.action(chan, 'Sending cheat sheet in a private message...')
-					cheat_sheet = [line.strip() for line in open(cheat_file).readlines() if line]
-					for line in cheat_sheet:
-						self.sendmsg(chan, line)
-			else:
-				cmd  = msg.split()[0][1:]
-				args = msg[len(cmd)+2:]
-				if time.time() - self.last_time < 2:
-					self.sendmsg(chan, color('Slow down nerd!', red))
-				elif cmd == 'hit':
-					if self.player:
-						if self.player == nick:
-							card_type, card_suit = self.draw()
-							if self.mini_deck:
-								msg_str = ''
-								for i in self.hand:
-									msg_str += ' ' + i
-								self.sendmsg(chan, msg_str)
-							else:
-								for i in range(5):
-									msg_str = ''
-									for i in self.hand[i]:
-										msg_str += ' ' + i
-									self.sendmsg(chan, msg_str)
-							if self.total > 21:
-								if deck['ace'][1] == 1 and not self.ace_minus:
-									self.total	 = self.total - 10
-									self.ace_minus = True
-									if self.total > 21:
-										self.sendmsg(chan, '{0} {1}'.format(color('BUST!', red), color('You went over 21 and lost!', grey)))
-										self.reset()
-									else:
-										self.sendmsg(chan, '{0} {1}'.format(color('You drew a {0} of {1}! Your total is now:'.format(card_type, card_suit[1]), yellow),  color(str(self.total), light_blue)))
-										self.last_move = time.time()
-								else:
-									self.sendmsg(chan, '{0} {1}'.format(color('BUST!', red), color('You went over 21 and lost!', grey)))
-									self.reset()
-							else:
-								self.sendmsg(chan, '{0} {1}'.format(color('You drew a {0} of {1}! Your total is now:'.format(card_type, card_suit[1]), yellow),  color(str(self.total), light_blue)))
-								self.last_move = time.time()
-						else:
-							self.error(chan, 'You are not currently playing!', '{0} is playing still'.format(self.player))
-					else:
-						self.error(chan, 'You are not currently playing!')
-				elif cmd == 'mini':
-					if not self.player:
-						if self.mini_deck:
-							self.setup_deck('normal')
-							self.sendmsg(chan, '{0} {1}'.format(color('Mini deck has been', yellow), color('DISABLED', red)))
-						else:
-							self.setup_deck('mini')
-							self.sendmsg(chan, '{0} {1}'.format(color('Mini deck has been', yellow), color('ENABLED', green)))
-					else:
-						self.error(chan, 'You can not change the deck in game!')
-				elif cmd == 'play':
-					if not self.player:
-						self.player = nick
-						self.action(chan, 'Starting a game of blackjack with {0}!'.format(nick))
-						for i in range(2):
-							self.draw()
-						if self.mini_deck:
-							msg_str = ''
-							for i in self.hand:
-								msg_str += ' ' + i
-							self.sendmsg(chan, msg_str)
-						else:
-							for i in range(5):
-								msg_str = ''
-								for i in self.hand[i]:
-									msg_str += ' ' + i
-								self.sendmsg(chan, msg_str)
-						self.sendmsg(chan, '{0} {1}'.format(color('Your total is now:', yellow), color(str(self.total), light_blue)))
-						self.last_move = time.time()
-						threading.Thread(target=self.timer).start()
-					elif self.player == nick:
-						self.error(chan, 'You have already started a game, please finish or stop the game!'.format(self.player))
-					else:
-						self.error(chan, '{0} is currently playing a game, please wait!'.format(self.player))
-				elif cmd == 'stand':
-					if self.player:
-						if self.player == nick:
-							self.sendmsg(chan, 'You have chosen to stand with {0} as your total.'.format(self.total))
-						else:
-							self.error(chan, 'You are not currently playing!', '{0} is playing still'.format(self.player))
-					else:
-						self.error(chan, 'You are not currently playing!')
-				elif cmd == 'stop':
-					if self.player:
-						if self.player == nick:
-							self.action(chan, 'Ending current game with {0}!'.format(nick))
-							self.reset()
-						else:
-							self.error(chan, 'You are not currently playing!', '{0} is playing still'.format(self.player))
-					else:
-						self.error(chan, 'You are not currently playing!')
-			self.last_time = time.time()
-
-	def event_nick_in_use(self):
-		debug.error_exit('BlackJack is already running.')
+		else:
+			self.player_left(kicked, chan)
 
 	def event_part(self, nick, chan):
-		if self.player == nick:
-			self.sendmsg(chan, 'The game with {0} has ended.'.format(color(self.nick, light_blue)))
-			self.reset()
+		if chan == config.connection.channel:
+			self.player_left(nick, chan)
 
 	def event_quit(self, nick):
-		if self.player == nick:
-			self.sendmsg(chan, 'The game with {0} has ended.'.format(color(self.nick, light_blue)))
-			self.reset()
+		self.player_left(nick, config.connection.channel)
 
-	def handle_events(self, data):
-		args = data.split()
-		if args[0] == 'PING':
-			self.raw('PONG ' + args[1][1:])
-		elif args[1] == '001': # Use 002 or 003 if you run into issues.
-			self.event_connect()
-		elif args[1] == '433':
-			self.event_nick_in_use()
-		elif args[1] in ('KICK','PART','PRIVMSG','QUIT'):
-			nick  = args[0].split('!')[0][1:]
-			if nick != config.ident.nickname:
-				if args[1] == 'KICK':
-					chan   = args[2]
-					kicked = args[3]
-					self.event_kick(nick, chan, kicked)
-				elif args[1] == 'PART':
-					chan = args[2]
-					self.event_part(nick, chan)
-				elif args[1] == 'PRIVMSG':
-					chan = args[2]
-					msg  = data.split('{0} PRIVMSG {1} :'.format(args[0], chan))[1]
-					if chan != config.ident.nickname:
-						self.event_message(nick, chan, msg)
-				elif args[1] == 'QUIT':
-					self.event_quit(nick)
+	def event_message(self, nick, chan, msg):
+		if chan != config.connection.channel:
+			return
+		parts = msg.split()
+		if not parts:
+			return
+		cmd = parts[0].lower()
+		if   cmd in ('!blackjack', '!bj'):  self.cmd_blackjack(nick, chan, parts[1:])
+		elif cmd == '!deal':                 self.cmd_deal(nick, chan)
+		elif cmd == '!hit':                  self.cmd_hit(nick, chan)
+		elif cmd == '!stand':                self.cmd_stand(nick, chan)
+		elif cmd == '!leave':                self.cmd_leave(nick, chan)
+		elif cmd == '!chips':                self.cmd_chips(nick, chan)
+		elif cmd == '!top':                  self.cmd_top(nick, chan)
+		elif cmd == '!help':                 self.cmd_help(nick, chan)
 
-	def identify(self, username, password):
-		self.sendmsg('nickserv', f'identify {username} {password}')
+	# --- Database ---
 
-	def join(self, chan, key=None):
-		self.raw(f'JOIN {chan} {key}') if key else self.raw('JOIN ' + chan)
+	def load_db(self):
+		db_path = os.path.join('data', 'chips.db')
+		os.makedirs('data', exist_ok=True)
+		self.db = pickledb.load(db_path, False)
+		threading.Thread(target=self._db_sync_loop, daemon=True).start()
+		debug.irc('Chip database loaded.')
 
-	def listen(self):
+	def _db_sync_loop(self):
 		while True:
-			try:
-				data = self.sock.recv(1024).decode('utf-8')
-				if data:
-					for line in (line for line in data.split('\r\n') if line):
-						debug.irc(line)
-						if line.startswith('ERROR :Closing Link:') and config.ident.nickname in data:
-							raise Exception('Connection has closed.')
-						elif len(line.split()) >= 2:
-							self.handle_events(line)
-				else:
-					debug.error('No data recieved from server.')
-					break
-			except (UnicodeDecodeError,UnicodeEncodeError):
-				debug.error('Unicode error has occured.')
-			except Exception as ex:
-				debug.error('Unexpected error occured.', ex)
-				break
-		self.event_disconnect()
+			time.sleep(DB_SYNC_INTERVAL)
+			if self.db:
+				self.db.dump()
+				debug.irc('Database synced to disk.')
 
-	def mode(self, target, mode):
-		self.raw(f'MODE {target} {mode}')
+	def get_player_data(self, nick):
+		key = nick.lower()
+		if not self.db.exists(key):
+			data = {'chips': STARTING_CHIPS, 'last_reset': 0}
+			self.db.set(key, data)
+			return data
+		return self.db.get(key)
 
-	def raw(self, msg):
-		self.sock.send(bytes(msg + '\r\n', 'utf-8'))
+	def set_player_data(self, nick, data):
+		self.db.set(nick.lower(), data)
 
-	def reset(self):
-		self.ace       = [False,False]
-		self.last_move = 0
-		self.player    = None
-		self.total     = 0
-		if self.mini_deck:
-			self.hand = []
-		else:
-			self.hand = {0:[],1:[],2:[],3:[],4:[]}
-		deck['ace'][1] = 11
-		for card in deck:
-			deck[card][2] = [club,diamond,heart,spade]
+	def get_chips(self, nick):
+		return self.get_player_data(nick)['chips']
 
-	def sendmsg(self, target, msg):
-		self.raw(f'PRIVMSG {target} :{msg}')
+	def add_chips(self, nick, amount):
+		data = self.get_player_data(nick)
+		data['chips'] = max(0, data['chips'] + amount)
+		self.set_player_data(nick, data)
+		return data['chips']
 
-	def setup_deck(self, deck_type):
-		if deck_type == 'mini':
-			self.hand        = []
-			self.mini_deck   = True
-			deck['ace'][0]   = 'A X'
-			deck['two'][0]   = '2 X'
-			deck['three'][0] = '3 X'
-			deck['four'][0]  = '4 X'
-			deck['five'][0]  = '5 X'
-			deck['six'][0]   = '6 X'
-			deck['seven'][0] = '7 X'
-			deck['eight'][0] = '8 X'
-			deck['nine'][0]  = '9 X'
-			deck['ten'][0]   = '10X'
-			deck['jack'][0]  = 'J X'
-			deck['queen'][0] = 'Q X'
-			deck['king'][0]  = 'K X'
-		elif deck_type == 'normal':
-			self.hand        = {0:[],1:[],2:[],3:[],4:[]}
-			self.mini_deck   = False
-			deck['ace'][0]   = ('A      ','       ','   X   ','       ','      A')
-			deck['two'][0]   = ('2      ','   X   ','       ','   X   ','      2')
-			deck['three'][0] = ('3      ','   X   ','   X   ','   X   ','      3')
-			deck['four'][0]  = ('4      ','  X X  ','       ','  X X  ','      4')
-			deck['five'][0]  = ('5      ','  X X  ','   X   ','  X X  ','      5')
-			deck['six'][0]   = ('6      ','  X X  ','  X X  ','  X X  ','      6')
-			deck['seven'][0] = ('7      ','  X X  ','  XXX  ','  X X  ','      7')
-			deck['eight'][0] = ('8      ','  XXX  ','  X X  ','  XXX  ','      8')
-			deck['nine'][0]  = ('9      ','  XXX  ','  XXX  ','  XXX  ','      9')
-			deck['ten'][0]   = ('10     ','  XXX  ',' XX XX ','  XXX  ','     10')
-			deck['jack'][0]  = ('J      ','       ','   X   ','       ','      J')
-			deck['queen'][0] = ('Q      ','       ','   X   ','       ','      Q')
-			deck['king'][0]  = ('K      ','       ','   X   ','       ','      K')
+	# --- Commands ---
 
-	def timer(self):
-		while self.player:
-			if time.time() - self.last_move > self.game_timeout:
-				self.sendmsg(config.connection.channel, '{0}, you took too long! The game has ended.'.format(self.player))
-				self.reset()
-				break
+	def cmd_blackjack(self, nick, chan, args):
+		with self.lock:
+			bet = DEFAULT_BET
+			if args:
+				try:
+					bet = int(args[0])
+				except ValueError:
+					self.sendmsg(chan, f'{color("ERROR", red)} Invalid bet amount.')
+					return
+				if bet < MIN_BET:
+					self.sendmsg(chan, f'{color("ERROR", red)} Minimum bet is ${MIN_BET}.')
+					return
+				if bet > MAX_BET:
+					self.sendmsg(chan, f'{color("ERROR", red)} Maximum bet is ${MAX_BET:,}.')
+					return
+
+			chips = self.get_chips(nick)
+			if chips < bet:
+				self.sendmsg(chan, f'{color("ERROR", red)} {nick}: you have ${chips:,}. Use {bold}!chips{bold} to reset if broke.')
+				return
+
+			if self.state == 'idle':
+				self.state   = 'lobby'
+				self.players = [Player(nick, bet)]
+				self.dealer_hand = []
+				self.current_idx = 0
+				self.sendmsg(chan, f'{bold}{color(" ♠ ♥  BLACKJACK  ♦ ♣ ", white, green)}{bold}')
+				self.sendmsg(chan, f'{nick} opened a table! Type {bold}!blackjack [bet]{bold} to join or {bold}!deal{bold} to start.')
+				self.sendmsg(chan, f'{nick} bets {bold}${bet:,}{bold} — {LOBBY_TIMEOUT}s until auto-deal')
+				self.lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._lobby_expired, [chan])
+				self.lobby_timer.daemon = True
+				self.lobby_timer.start()
+
+			elif self.state == 'lobby':
+				if any(p.nick.lower() == nick.lower() for p in self.players):
+					self.sendmsg(chan, f'{nick}: you are already at the table.')
+					return
+				if len(self.players) >= MAX_PLAYERS:
+					self.sendmsg(chan, f'{color("ERROR", red)} Table is full ({MAX_PLAYERS} players).')
+					return
+				self.players.append(Player(nick, bet))
+				self.sendmsg(chan, f'{nick} joins the table! ({bold}${bet:,}{bold} bet) [{len(self.players)}/{MAX_PLAYERS}]')
+				if len(self.players) >= MAX_PLAYERS:
+					if self.lobby_timer:
+						self.lobby_timer.cancel()
+					self._start_round(chan)
+
+			elif self.state == 'playing':
+				self.sendmsg(chan, f'{color("ERROR", red)} A round is in progress. Wait for it to finish.')
+
+	def cmd_deal(self, nick, chan):
+		with self.lock:
+			if self.state != 'lobby':
+				return
+			if nick.lower() != self.players[0].nick.lower():
+				self.sendmsg(chan, f'{color("ERROR", red)} Only {self.players[0].nick} can start the deal.')
+				return
+			if self.lobby_timer:
+				self.lobby_timer.cancel()
+			self._start_round(chan)
+
+	def cmd_hit(self, nick, chan):
+		with self.lock:
+			if self.state != 'playing':
+				return
+			if self.current_idx >= len(self.players):
+				return
+			current = self.players[self.current_idx]
+			if nick.lower() != current.nick.lower():
+				if any(p.nick.lower() == nick.lower() for p in self.players):
+					self.sendmsg(chan, f"{nick}: it's {bold}{current.nick}'s{bold} turn.")
+				return
+
+			card = self.shoe.draw()
+			current.hand.append(card)
+			self.last_move = time.time()
+
+			self.sendmsg(chan, f'{bold}[{current.nick}]{bold} {format_hand(current.hand)} ({color(str(current.total), light_blue)})')
+
+			if current.total > 21:
+				current.status = 'busted'
+				self.sendmsg(chan, f'{color("BUST!", red)} {current.nick} went over 21!')
+				self._next_player(chan)
+			elif current.total == 21:
+				current.status = 'stood'
+				self.sendmsg(chan, f'{color("21!", green)} {current.nick} hits 21!')
+				self._next_player(chan)
+
+	def cmd_stand(self, nick, chan):
+		with self.lock:
+			if self.state != 'playing':
+				return
+			if self.current_idx >= len(self.players):
+				return
+			current = self.players[self.current_idx]
+			if nick.lower() != current.nick.lower():
+				return
+			current.status = 'stood'
+			self.last_move = time.time()
+			self.sendmsg(chan, f'{current.nick} stands at {bold}{current.total}{bold}.')
+			self._next_player(chan)
+
+	def cmd_leave(self, nick, chan):
+		with self.lock:
+			if self.state == 'lobby':
+				idx = next((i for i, p in enumerate(self.players) if p.nick.lower() == nick.lower()), None)
+				if idx is not None:
+					self.players.pop(idx)
+					self.sendmsg(chan, f'{nick} left the table. [{len(self.players)}/{MAX_PLAYERS}]')
+					if not self.players:
+						if self.lobby_timer:
+							self.lobby_timer.cancel()
+						self.state = 'idle'
+						self.sendmsg(chan, 'Table closed — no players remain.')
+
+	def cmd_chips(self, nick, chan):
+		data  = self.get_player_data(nick)
+		chips = data['chips']
+		if chips <= 0:
+			elapsed = time.time() - data.get('last_reset', 0)
+			if elapsed >= RESET_COOLDOWN:
+				data['chips']      = STARTING_CHIPS
+				data['last_reset'] = time.time()
+				self.set_player_data(nick, data)
+				self.sendmsg(chan, f'{nick} has been given {bold}${STARTING_CHIPS:,}{bold} in chips. Good luck!')
 			else:
+				remaining = RESET_COOLDOWN - elapsed
+				hours     = int(remaining // 3600)
+				minutes   = int((remaining % 3600) // 60)
+				self.sendmsg(chan, f'{nick}: you are broke. Reset available in {bold}{hours}h {minutes}m{bold}.')
+		else:
+			self.sendmsg(chan, f'{nick} has {bold}${chips:,}{bold} in chips.')
+
+	def cmd_top(self, nick, chan):
+		all_keys = self.db.getall()
+		if not all_keys:
+			self.sendmsg(chan, 'No players registered yet.')
+			return
+		leaderboard = []
+		for key in all_keys:
+			data = self.db.get(key)
+			if isinstance(data, dict) and 'chips' in data:
+				leaderboard.append((key, data['chips']))
+		leaderboard.sort(key=lambda x: x[1], reverse=True)
+		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", white, green)}{bold}')
+		for i, (name, chips) in enumerate(leaderboard[:10], 1):
+			self.sendmsg(chan, f' {bold}#{i}{bold} {name} — ${chips:,}')
+
+	def cmd_help(self, nick, chan):
+		self.sendmsg(chan, f'{bold}{color(" BLACKJACK COMMANDS ", white, green)}{bold}')
+		self.sendmsg(chan, f' {bold}!blackjack [bet]{bold} — Start or join a game (default bet: ${DEFAULT_BET})')
+		self.sendmsg(chan, f' {bold}!deal{bold} — Force deal early (table opener only)')
+		self.sendmsg(chan, f' {bold}!hit{bold}  — Draw another card')
+		self.sendmsg(chan, f' {bold}!stand{bold} — Keep your hand')
+		self.sendmsg(chan, f' {bold}!leave{bold} — Leave the lobby before deal')
+		self.sendmsg(chan, f' {bold}!chips{bold} — Check your chips (resets to ${STARTING_CHIPS:,} if broke, 24h cooldown)')
+		self.sendmsg(chan, f' {bold}!top{bold} — Leaderboard (top 10)')
+
+	# --- Game Logic ---
+
+	def _lobby_expired(self, chan):
+		with self.lock:
+			if self.state == 'lobby':
+				self._start_round(chan)
+
+	def _start_round(self, chan):
+		self.state       = 'playing'
+		self.current_idx = 0
+		self.dealer_hand = []
+
+		for _ in range(2):
+			for player in self.players:
+				player.hand.append(self.shoe.draw())
+			self.dealer_hand.append(self.shoe.draw())
+
+		self.sendmsg(chan, f'{bold}{color(" CARDS DEALT ", white, orange)}{bold}')
+		self.sendmsg(chan, f'{bold}[Dealer]{bold} {format_hand(self.dealer_hand, hide_first=True)}')
+
+		for player in self.players:
+			bj = ''
+			if player.is_blackjack:
+				player.status = 'blackjack'
+				bj = f' — {color("BLACKJACK!", green)}'
+			self.sendmsg(chan, f'{bold}[{player.nick}]{bold} {format_hand(player.hand)} ({color(str(player.total), light_blue)}){bj}')
+
+		self.last_move = time.time()
+		threading.Thread(target=self._move_timer, args=(chan,), daemon=True).start()
+		self._advance(chan)
+
+	def _advance(self, chan):
+		while self.current_idx < len(self.players):
+			if self.players[self.current_idx].status == 'playing':
+				p = self.players[self.current_idx]
+				self.last_move = time.time()
+				self.sendmsg(chan, f"{p.nick}: your turn — {bold}!hit{bold} or {bold}!stand{bold}")
+				return
+			self.current_idx += 1
+		self._dealer_turn(chan)
+
+	def _next_player(self, chan):
+		self.current_idx += 1
+		self._advance(chan)
+
+	def _dealer_turn(self, chan):
+		all_busted = all(p.status == 'busted' for p in self.players)
+
+		self.sendmsg(chan, f'{bold}{color(" DEALER REVEALS ", white, orange)}{bold}')
+		dtotal = hand_value(self.dealer_hand)
+		self.sendmsg(chan, f'{bold}[Dealer]{bold} {format_hand(self.dealer_hand)} ({color(str(dtotal), light_blue)})')
+
+		if not all_busted:
+			while dtotal < 17:
 				time.sleep(1)
+				card = self.shoe.draw()
+				self.dealer_hand.append(card)
+				dtotal = hand_value(self.dealer_hand)
+				self.sendmsg(chan, f'{bold}[Dealer]{bold} hits {format_card(*card)} \u2192 ({color(str(dtotal), light_blue)})')
+
+		dealer_bust = dtotal > 21
+		dealer_bj   = len(self.dealer_hand) == 2 and dtotal == 21
+
+		if dealer_bust:
+			self.sendmsg(chan, f'{color("Dealer BUSTS!", red)}')
+		elif dealer_bj:
+			self.sendmsg(chan, f'{color("Dealer has BLACKJACK!", yellow)}')
+
+		self.sendmsg(chan, f'{bold}{color(" RESULTS ", white, green)}{bold}')
+
+		for p in self.players:
+			if p.status == 'busted':
+				new_chips = self.add_chips(p.nick, -p.bet)
+				self.sendmsg(chan, f' {color("\u2717", red)} {bold}{p.nick}{bold} busted ({bold}-${p.bet:,}{bold}) \u2192 ${new_chips:,}')
+			elif p.status == 'blackjack':
+				if dealer_bj:
+					chips = self.get_chips(p.nick)
+					self.sendmsg(chan, f' {color("\u2500", yellow)} {bold}{p.nick}{bold} push — both blackjack \u2192 ${chips:,}')
+				else:
+					win = int(p.bet * 1.5)
+					new_chips = self.add_chips(p.nick, win)
+					self.sendmsg(chan, f' {color("\u2605", green)} {bold}{p.nick}{bold} {color("BLACKJACK", green)} ({bold}+${win:,}{bold}) \u2192 ${new_chips:,}')
+			elif dealer_bust:
+				new_chips = self.add_chips(p.nick, p.bet)
+				self.sendmsg(chan, f' {color("\u2713", green)} {bold}{p.nick}{bold} wins ({bold}+${p.bet:,}{bold}) \u2192 ${new_chips:,}')
+			elif p.total > dtotal:
+				new_chips = self.add_chips(p.nick, p.bet)
+				self.sendmsg(chan, f' {color("\u2713", green)} {bold}{p.nick}{bold} wins {p.total} vs {dtotal} ({bold}+${p.bet:,}{bold}) \u2192 ${new_chips:,}')
+			elif p.total == dtotal:
+				chips = self.get_chips(p.nick)
+				self.sendmsg(chan, f' {color("\u2500", yellow)} {bold}{p.nick}{bold} push {p.total} vs {dtotal} \u2192 ${chips:,}')
+			else:
+				new_chips = self.add_chips(p.nick, -p.bet)
+				self.sendmsg(chan, f' {color("\u2717", red)} {bold}{p.nick}{bold} loses {p.total} vs {dtotal} ({bold}-${p.bet:,}{bold}) \u2192 ${new_chips:,}')
+
+		if self.db:
+			self.db.dump()
+
+		self.reset_game()
+
+	def _move_timer(self, chan):
+		while True:
+			time.sleep(5)
+			with self.lock:
+				if self.state != 'playing':
+					break
+				if self.current_idx >= len(self.players):
+					break
+				if time.time() - self.last_move > MOVE_TIMEOUT:
+					current = self.players[self.current_idx]
+					if current.status == 'playing':
+						current.status = 'busted'
+						self.sendmsg(chan, f'{color("TIMEOUT!", red)} {current.nick} ran out of time and forfeits!')
+						self._next_player(chan)
+
+	def player_left(self, nick, chan):
+		with self.lock:
+			if self.state == 'lobby':
+				idx = next((i for i, p in enumerate(self.players) if p.nick.lower() == nick.lower()), None)
+				if idx is not None:
+					self.players.pop(idx)
+					self.sendmsg(chan, f'{nick} left the table. [{len(self.players)}/{MAX_PLAYERS}]')
+					if not self.players:
+						if self.lobby_timer:
+							self.lobby_timer.cancel()
+						self.state = 'idle'
+						self.sendmsg(chan, 'Table closed — no players remain.')
+			elif self.state == 'playing':
+				for i, p in enumerate(self.players):
+					if p.nick.lower() == nick.lower() and p.status == 'playing':
+						p.status = 'busted'
+						self.sendmsg(chan, f'{nick} left — hand forfeited.')
+						if i == self.current_idx:
+							self._next_player(chan)
+						break
+
+	def reset_game(self):
+		self.state       = 'idle'
+		self.players     = []
+		self.dealer_hand = []
+		self.current_idx = 0
+		self.last_move   = 0
+
 
 BlackJack = IRC()
