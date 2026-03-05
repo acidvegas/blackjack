@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 import socket
 import ssl
 import threading
@@ -77,6 +78,14 @@ def c_cmd(command):
 def c_arg(text):
 	return color(str(text), grey)
 
+
+_irc_strip_re = re.compile(r'\x03(\d{1,2}(,\d{1,2})?)?|\x02|\x0f|\x16|\x1d|\x1f')
+
+def _vis_len(s):
+	return len(_irc_strip_re.sub('', s))
+
+def _pad(s, width):
+	return s + ' ' * max(0, width - _vis_len(s))
 
 def _log(msg):
 	print(f'{time.strftime("%H:%M:%S")} | {msg}')
@@ -315,7 +324,7 @@ class IRC:
 			elif cmd == '!leave':                 self.cmd_leave(nick, chan)
 			elif cmd == '!chips':                 self.cmd_chips(nick, chan, parts[1:])
 			elif cmd == '!top':                   self.cmd_top(nick, chan)
-			elif cmd == '!help':                  self.cmd_help(nick, chan)
+			elif cmd == '@casino':                self.cmd_help(nick, chan)
 			elif cmd == '!mini':                  self.cmd_mini(nick, chan)
 			elif cmd == '!cheat':                 self.cmd_cheat(nick, chan)
 		except Exception as ex:
@@ -833,20 +842,36 @@ class IRC:
 				leaderboard.append((key, data['chips']))
 		leaderboard.sort(key=lambda x: x[1], reverse=True)
 		house = self.house_chips()
-		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", black, green)}{bold} {sep} House: {c_money(house)}')
+		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", black, green)}{bold}')
+		self.sendmsg(chan, f' House: {c_money(house)}')
 		for i, (name, chips) in enumerate(leaderboard[:10], 1):
-			self.sendmsg(chan, f' {bold}#{i}{bold} {c_nick(name)} \u2014 {c_money(chips)}')
+			pad = name[:20].ljust(20)
+			self.sendmsg(chan, f' {bold}#{i:<2}{bold} {c_nick(pad)} {c_money(chips)}')
 
 	def cmd_help(self, nick, chan):
-		self.sendmsg(chan, f'{bold}{color(" COMMANDS ", black, green)}{bold}')
-		self.sendmsg(chan, f' {bold}\u2500\u2500 Blackjack \u2500\u2500{bold}')
-		self.sendmsg(chan, f' {c_cmd("!blackjack")} {c_arg("[bet]")} \u2014 Start or join (default: {c_money(DEFAULT_BET)})')
-		self.sendmsg(chan, f' {c_cmd("!hit")} \u2014 Draw a card  {sep}  {c_cmd("!stand")} \u2014 Keep hand  {sep}  {c_cmd("!double")} \u2014 Double down')
-		self.sendmsg(chan, f' {bold}\u2500\u2500 Poker \u2500\u2500{bold}')
-		self.sendmsg(chan, f' {c_cmd("!poker")} \u2014 Start or join a table (blinds {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)})')
-		self.sendmsg(chan, f' {c_cmd("!check")} {sep} {c_cmd("!call")} {sep} {c_cmd("!raise")} {c_arg("<amt>")} {sep} {c_cmd("!fold")} {sep} {c_cmd("!allin")}')
-		self.sendmsg(chan, f' {bold}\u2500\u2500 General \u2500\u2500{bold}')
-		self.sendmsg(chan, f' {c_cmd("!deal")} \u2014 Force deal  {sep}  {c_cmd("!leave")} \u2014 Leave lobby  {sep}  {c_cmd("!chips")} \u2014 Check/reset chips  {sep}  {c_cmd("!top")} \u2014 Leaderboard  {sep}  {c_cmd("!mini")} \u2014 Toggle compact cards  {sep}  {c_cmd("!cheat")} \u2014 Cheat sheet')
+		url = 'https://github.com/acidvegas/irc-casino'
+		self.sendmsg(chan, f'{bold}{color(" IRC CASINO ", black, green)}{bold} {sep} {color(url, light_blue)}')
+		cmds = [
+			(c_cmd('!blackjack') + ' ' + c_arg('[bet]'), f'Start or join a blackjack table (default: {c_money(DEFAULT_BET)})'),
+			(c_cmd('!hit'),                               'Draw a card'),
+			(c_cmd('!stand'),                             'Keep your hand'),
+			(c_cmd('!double'),                            'Double down'),
+			(c_cmd('!poker'),                             f'Start or join a poker table (blinds {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)})'),
+			(c_cmd('!check'),                             'Check (poker)'),
+			(c_cmd('!call'),                              'Call current bet (poker)'),
+			(c_cmd('!raise') + ' ' + c_arg('<amt>'),      'Raise to amount (poker)'),
+			(c_cmd('!fold'),                              'Fold hand (poker)'),
+			(c_cmd('!allin'),                             'Go all-in (poker)'),
+			(c_cmd('!deal'),                              'Force deal if lobby open'),
+			(c_cmd('!leave'),                             'Leave the lobby'),
+			(c_cmd('!chips'),                             'Check your chip balance'),
+			(c_cmd('!chips') + ' ' + c_arg('reset'),      'Request chip reset (24h wait)'),
+			(c_cmd('!top'),                               'Leaderboard'),
+			(c_cmd('!mini'),                              'Toggle compact card display'),
+			(c_cmd('!cheat'),                             'Blackjack strategy sheet'),
+		]
+		for cmd, desc in cmds:
+			self.sendmsg(chan, f' {_pad(cmd, 20)} {sep} {desc}')
 
 	def cmd_mini(self, nick, chan):
 		self.mini_mode = not self.mini_mode
