@@ -7,6 +7,7 @@ import socket
 import ssl
 import threading
 import time
+import traceback
 
 import config
 
@@ -215,6 +216,7 @@ class IRC:
 				_log('[!] Unicode error occurred.')
 			except Exception as ex:
 				_log(f'[!] Unexpected error: {ex}')
+				traceback.print_exc()
 				break
 		self.event_disconnect()
 
@@ -244,12 +246,17 @@ class IRC:
 	# ──────────────────── Events ────────────────────
 
 	def event_connect(self):
-		self.load_db()
+		try:
+			self.load_db()
+		except Exception as ex:
+			_log(f'[!] Failed to load database: {ex}')
+			traceback.print_exc()
 		if config.login.nickserv:
 			self.identify(config.ident.username, config.login.nickserv)
 		if config.login.operator:
 			self.raw(f'OPER {config.ident.username} {config.login.operator}')
 		self.join(config.connection.channel, config.connection.key)
+		self.chan = config.connection.channel
 
 	def event_disconnect(self):
 		if self.db:
@@ -261,21 +268,21 @@ class IRC:
 		self.connect()
 
 	def event_kick(self, nick, chan, kicked):
-		if kicked == config.ident.nickname and chan == config.connection.channel:
+		if kicked == config.ident.nickname and chan.lower() == config.connection.channel.lower():
 			time.sleep(3)
 			self.join(config.connection.channel, config.connection.key)
 		else:
 			self.player_left(kicked, chan)
 
 	def event_part(self, nick, chan):
-		if chan == config.connection.channel:
+		if chan.lower() == config.connection.channel.lower():
 			self.player_left(nick, chan)
 
 	def event_quit(self, nick):
 		self.player_left(nick, config.connection.channel)
 
 	def event_message(self, nick, chan, msg):
-		if chan != config.connection.channel:
+		if chan.lower() != config.connection.channel.lower():
 			return
 		parts = msg.split()
 		if not parts:
@@ -303,7 +310,11 @@ class IRC:
 			elif cmd == '!mini':                  self.cmd_mini(nick, chan)
 		except Exception as ex:
 			_log(f'[!] Command error ({cmd}): {ex}')
-			self.sendmsg(chan, f'{color("ERROR", red)} {ex}')
+			traceback.print_exc()
+			try:
+				self.sendmsg(chan, f'{color("ERROR", red)} {ex}')
+			except Exception:
+				pass
 
 	# ──────────────────── Helpers ────────────────────
 
@@ -326,9 +337,13 @@ class IRC:
 		db_path = os.path.join('data', 'chips.json')
 		os.makedirs('data', exist_ok=True)
 		self.db = PickleDB(db_path)
-		self.db.load()
+		try:
+			self.db.load()
+			_log('Chip database loaded.')
+		except Exception as ex:
+			_log(f'[!] Database load failed ({ex}), starting fresh.')
+			self.db = PickleDB(db_path)
 		threading.Thread(target=self._db_sync_loop, daemon=True).start()
-		_log('Chip database loaded.')
 
 	def _db_sync_loop(self):
 		while True:
@@ -337,6 +352,8 @@ class IRC:
 				self.db.save()
 
 	def get_player_data(self, nick):
+		if not self.db:
+			return {'chips': STARTING_CHIPS, 'last_reset': 0}
 		key  = nick.lower()
 		data = self.db.get(key)
 		if data is None:
