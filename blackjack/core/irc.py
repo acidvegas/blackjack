@@ -37,21 +37,39 @@ SUITS = {
 RANKS       = ['A','2','3','4','5','6','7','8','9','10','J','Q','K']
 RANK_VALUES = {'A':11, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':10, 'Q':10, 'K':10}
 
-bold      = '\x02'
-reset     = '\x0f'
-sym_arrow = '\u2192'
-sym_check = '\u2713'
-sym_cross = '\u2717'
-sym_dash  = '\u2500'
-sym_star  = '\u2605'
-white     = '00'
-black     = '01'
-green     = '03'
-red       = '04'
-orange    = '07'
-yellow    = '08'
+CARD_ART = {
+	'A'  : ('A      ','       ','   X   ','       ','      A'),
+	'2'  : ('2      ','   X   ','       ','   X   ','      2'),
+	'3'  : ('3      ','   X   ','   X   ','   X   ','      3'),
+	'4'  : ('4      ','  X X  ','       ','  X X  ','      4'),
+	'5'  : ('5      ','  X X  ','   X   ','  X X  ','      5'),
+	'6'  : ('6      ','  X X  ','  X X  ','  X X  ','      6'),
+	'7'  : ('7      ','  X X  ','  XXX  ','  X X  ','      7'),
+	'8'  : ('8      ','  XXX  ','  X X  ','  XXX  ','      8'),
+	'9'  : ('9      ','  XXX  ','  XXX  ','  XXX  ','      9'),
+	'10' : ('10     ','  XXX  ',' XX XX ','  XXX  ','     10'),
+	'J'  : ('J      ','       ','   X   ','       ','      J'),
+	'Q'  : ('Q      ','       ','   X   ','       ','      Q'),
+	'K'  : ('K      ','       ','   X   ','       ','      K'),
+}
+FACEDOWN = ('\u2593' * 7,) * 5
+
+bold       = '\x02'
+reset      = '\x0f'
+sym_arrow  = '\u2192'
+sym_check  = '\u2713'
+sym_cross  = '\u2717'
+sym_dash   = '\u2500'
+sym_star   = '\u2605'
+white      = '00'
+black      = '01'
+blue       = '02'
+green      = '03'
+red        = '04'
+orange     = '07'
+yellow     = '08'
 light_blue = '12'
-grey      = '14'
+grey       = '14'
 
 
 def color(msg, foreground, background=None):
@@ -78,6 +96,21 @@ def format_hand(cards, hide_first=False):
 	if hide_first and len(cards) > 1:
 		return color('[??]', grey, white) + ' ' + ' '.join(format_card(r, s) for r, s in cards[1:])
 	return ' '.join(format_card(r, s) for r, s in cards)
+
+
+def render_hand(cards, hide_first=False):
+	lines = [[] for _ in range(5)]
+	for i, (rank, suit) in enumerate(cards):
+		if hide_first and i == 0:
+			for j in range(5):
+				lines[j].append(color(FACEDOWN[j], light_blue, blue))
+		else:
+			sym, is_red = SUITS[suit]
+			card_color = red if is_red else black
+			art = CARD_ART[rank]
+			for j in range(5):
+				lines[j].append(color(art[j].replace('X', sym), card_color, white))
+	return [' '.join(line) for line in lines]
 
 
 class Shoe:
@@ -161,6 +194,13 @@ class IRC:
 	def sendmsg(self, target, msg):
 		self.raw(f'PRIVMSG {target} :{msg}')
 		time.sleep(0.4)
+
+	def show_cards(self, chan, label, cards, hide_first=False):
+		lines = render_hand(cards, hide_first)
+		self.sendmsg(chan, label)
+		for line in lines:
+			self.raw(f'PRIVMSG {chan} :{line}')
+			time.sleep(0.1)
 
 	def action(self, chan, msg):
 		self.sendmsg(chan, f'\x01ACTION {msg}\x01')
@@ -328,7 +368,7 @@ class IRC:
 				self.players = [Player(nick, bet)]
 				self.dealer_hand = []
 				self.current_idx = 0
-				self.sendmsg(chan, f'{bold}{color(" ♠ ♥  BLACKJACK  ♦ ♣ ", white, green)}{bold}')
+				self.sendmsg(chan, f'{bold}{color(" ♠ ♥  BLACKJACK  ♦ ♣ ", black, green)}{bold}')
 				self.sendmsg(chan, f'{nick} opened a table! Type {bold}!blackjack [bet]{bold} to join or {bold}!deal{bold} to start.')
 				self.sendmsg(chan, f'{nick} bets {bold}${bet:,}{bold} — {LOBBY_TIMEOUT}s until auto-deal')
 				self.lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._lobby_expired, [chan])
@@ -379,16 +419,16 @@ class IRC:
 			current.hand.append(card)
 			self.last_move = time.time()
 
-			self.sendmsg(chan, f'{bold}[{current.nick}]{bold} {format_hand(current.hand)} ({color(str(current.total), light_blue)})')
-
 			if current.total > 21:
 				current.status = 'busted'
-				self.sendmsg(chan, f'{color("BUST!", red)} {current.nick} went over 21!')
+				self.show_cards(chan, f'{bold}[{current.nick}]{bold} ({color(str(current.total), light_blue)}) — {color("BUST!", red)}', current.hand)
 				self._next_player(chan)
 			elif current.total == 21:
 				current.status = 'stood'
-				self.sendmsg(chan, f'{color("21!", green)} {current.nick} hits 21!')
+				self.show_cards(chan, f'{bold}[{current.nick}]{bold} ({color(str(current.total), light_blue)}) — {color("21!", green)}', current.hand)
 				self._next_player(chan)
+			else:
+				self.show_cards(chan, f'{bold}[{current.nick}]{bold} ({color(str(current.total), light_blue)})', current.hand)
 
 	def cmd_stand(self, nick, chan):
 		with self.lock:
@@ -446,12 +486,12 @@ class IRC:
 			if isinstance(data, dict) and 'chips' in data:
 				leaderboard.append((key, data['chips']))
 		leaderboard.sort(key=lambda x: x[1], reverse=True)
-		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", white, green)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", black, green)}{bold}')
 		for i, (name, chips) in enumerate(leaderboard[:10], 1):
 			self.sendmsg(chan, f' {bold}#{i}{bold} {name} — ${chips:,}')
 
 	def cmd_help(self, nick, chan):
-		self.sendmsg(chan, f'{bold}{color(" BLACKJACK COMMANDS ", white, green)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" BLACKJACK COMMANDS ", black, green)}{bold}')
 		self.sendmsg(chan, f' {bold}!blackjack [bet]{bold} — Start or join a game (default bet: ${DEFAULT_BET})')
 		self.sendmsg(chan, f' {bold}!deal{bold} — Force deal early (table opener only)')
 		self.sendmsg(chan, f' {bold}!hit{bold}  — Draw another card')
@@ -477,15 +517,15 @@ class IRC:
 				player.hand.append(self.shoe.draw())
 			self.dealer_hand.append(self.shoe.draw())
 
-		self.sendmsg(chan, f'{bold}{color(" CARDS DEALT ", white, orange)}{bold}')
-		self.sendmsg(chan, f'{bold}[Dealer]{bold} {format_hand(self.dealer_hand, hide_first=True)}')
+		self.sendmsg(chan, f'{bold}{color(" CARDS DEALT ", black, orange)}{bold}')
+		self.show_cards(chan, f'{bold}[Dealer]{bold}', self.dealer_hand, hide_first=True)
 
 		for player in self.players:
 			bj = ''
 			if player.is_blackjack:
 				player.status = 'blackjack'
-				bj = f' — {color("BLACKJACK!", green)}'
-			self.sendmsg(chan, f'{bold}[{player.nick}]{bold} {format_hand(player.hand)} ({color(str(player.total), light_blue)}){bj}')
+				bj = f' {color("BLACKJACK!", green)}'
+			self.show_cards(chan, f'{bold}[{player.nick}]{bold} ({color(str(player.total), light_blue)}){bj}', player.hand)
 
 		self.last_move = time.time()
 		threading.Thread(target=self._move_timer, args=(chan,), daemon=True).start()
@@ -508,9 +548,9 @@ class IRC:
 	def _dealer_turn(self, chan):
 		all_busted = all(p.status == 'busted' for p in self.players)
 
-		self.sendmsg(chan, f'{bold}{color(" DEALER REVEALS ", white, orange)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" DEALER REVEALS ", black, orange)}{bold}')
 		dtotal = hand_value(self.dealer_hand)
-		self.sendmsg(chan, f'{bold}[Dealer]{bold} {format_hand(self.dealer_hand)} ({color(str(dtotal), light_blue)})')
+		self.show_cards(chan, f'{bold}[Dealer]{bold} ({color(str(dtotal), light_blue)})', self.dealer_hand)
 
 		if not all_busted:
 			while dtotal < 17:
@@ -519,6 +559,8 @@ class IRC:
 				self.dealer_hand.append(card)
 				dtotal = hand_value(self.dealer_hand)
 				self.sendmsg(chan, f'{bold}[Dealer]{bold} hits {format_card(*card)} {sym_arrow} ({color(str(dtotal), light_blue)})')
+			if len(self.dealer_hand) > 2:
+				self.show_cards(chan, f'{bold}[Dealer]{bold} ({color(str(dtotal), light_blue)})', self.dealer_hand)
 
 		dealer_bust = dtotal > 21
 		dealer_bj   = len(self.dealer_hand) == 2 and dtotal == 21
@@ -528,7 +570,7 @@ class IRC:
 		elif dealer_bj:
 			self.sendmsg(chan, f'{color("Dealer has BLACKJACK!", yellow)}')
 
-		self.sendmsg(chan, f'{bold}{color(" RESULTS ", white, green)}{bold}')
+		self.sendmsg(chan, f'{bold}{color(" RESULTS ", black, green)}{bold}')
 
 		for p in self.players:
 			if p.status == 'busted':
