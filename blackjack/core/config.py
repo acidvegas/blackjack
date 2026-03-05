@@ -10,7 +10,7 @@ class connection:
 	ssl	       = False
 	ssl_verify = False
 	vhost      = None
-	channel	   = '#dev'
+	channel	   = '#superbowl'
 	key	       = None
 
 

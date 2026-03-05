@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # BlackJack IRC Bot - Developed by acidvegas in Python (https://acid.vegas/blackjack)
-# cards.py
+# cards.py - Card data, game logic, and hand evaluation
 
 import random
 from collections import Counter
@@ -20,34 +20,9 @@ RESET_COOLDOWN   = 86400
 SMALL_BLIND      = 5
 BIG_BLIND        = 10
 
-# --- IRC Formatting ---
-bold       = '\x02'
-reset      = '\x0f'
-sym_arrow  = '\u2192'
-sym_check  = '\u2713'
-sym_cross  = '\u2717'
-sym_dash   = '\u2500'
-sym_star   = '\u2605'
-white      = '00'
-black      = '01'
-blue       = '02'
-green      = '03'
-red        = '04'
-orange     = '07'
-yellow     = '08'
-light_blue = '12'
-grey       = '14'
-
-
-def color(msg, foreground, background=None):
-	if background:
-		return f'\x03{foreground},{background}{msg}{reset}'
-	return f'\x03{foreground}{msg}{reset}'
-
-
 # --- Card Data ---
 SUITS = {
-	'hearts'   : ('❤', True),
+	'hearts'   : ('♥', True),
 	'diamonds' : ('♦', True),
 	'clubs'    : ('♣', False),
 	'spades'   : ('♠', False),
@@ -70,10 +45,7 @@ CARD_ART = {
 	'Q'  : ('Q      ','       ','   X   ','       ','      Q'),
 	'K'  : ('K      ','       ','   X   ','       ','      K'),
 }
-FACEDOWN = ('\u2593' * 7,) * 5
-
-BJ_HEADER    = " \u2660 \u2764  BLACKJACK  \u2666 \u2663 "
-POKER_HEADER = " \u2660 \u2764  TEXAS HOLD'EM  \u2666 \u2663 "
+FACEDOWN = ('░' * 7,) * 5
 
 
 # --- Blackjack Hand Value ---
@@ -85,34 +57,6 @@ def hand_value(cards):
 		total -= 10
 		aces  -= 1
 	return total
-
-
-# --- Card Formatting ---
-
-def format_card(rank, suit):
-	sym, is_red = SUITS[suit]
-	return color(f'{rank}{sym}', red if is_red else black, white)
-
-
-def format_hand(cards, hide_first=False):
-	if hide_first and len(cards) > 1:
-		return color('[??]', grey, white) + ' ' + ' '.join(format_card(r, s) for r, s in cards[1:])
-	return ' '.join(format_card(r, s) for r, s in cards)
-
-
-def render_hand(cards, hide_first=False):
-	lines = [[] for _ in range(5)]
-	for i, (rank, suit) in enumerate(cards):
-		if hide_first and i == 0:
-			for j in range(5):
-				lines[j].append(color(FACEDOWN[j], light_blue, blue))
-		else:
-			sym, is_red = SUITS[suit]
-			card_color = red if is_red else black
-			art = CARD_ART[rank]
-			for j in range(5):
-				lines[j].append(color(art[j].replace('X', sym), card_color, white))
-	return [' '.join(line) for line in lines]
 
 
 # --- Poker Hand Evaluation ---

@@ -9,7 +9,6 @@ import threading
 import time
 
 import config
-import debug
 
 try:
 	from pickledb import PickleDB
@@ -20,15 +19,94 @@ from cards import (
 	NUM_DECKS, MAX_PLAYERS, DEFAULT_BET, MIN_BET, MAX_BET, STARTING_CHIPS,
 	MOVE_TIMEOUT, LOBBY_TIMEOUT, DB_SYNC_INTERVAL, RESET_COOLDOWN,
 	SMALL_BLIND, BIG_BLIND,
-	bold, reset, color,
-	sym_arrow, sym_check, sym_cross, sym_dash, sym_star,
-	white, black, blue, green, red, orange, yellow, light_blue, grey,
-	BJ_HEADER, POKER_HEADER,
-	hand_value, format_card, format_hand, render_hand,
-	poker_best_hand, poker_hand_name, poker_calculate_pots,
+	SUITS, CARD_ART, FACEDOWN,
+	hand_value, poker_best_hand, poker_hand_name, poker_calculate_pots,
 	Shoe, Player, PokerPlayer,
 )
 
+# --- IRC Formatting ---
+bold  = '\x02'
+reset = '\x0f'
+
+white      = '00'
+black      = '01'
+blue       = '02'
+green      = '03'
+red        = '04'
+orange     = '07'
+yellow     = '08'
+cyan       = '11'
+light_blue = '12'
+pink       = '13'
+grey       = '14'
+
+sym_arrow = '\u2192'
+sym_check = '\u2713'
+sym_cross = '\u2717'
+sym_dash  = '\u2500'
+sym_star  = '\u2605'
+
+BJ_HEADER    = " \u2660 \u2764  BLACKJACK  \u2666 \u2663 "
+POKER_HEADER = " \u2660 \u2764  TEXAS HOLD'EM  \u2666 \u2663 "
+
+
+def color(msg, foreground, background=None):
+	if background:
+		return f'\x03{foreground},{background}{msg}{reset}'
+	return f'\x03{foreground}{msg}{reset}'
+
+
+def c_money(val):
+	if isinstance(val, (int, float)):
+		return color(f'${val:,}', green)
+	return color(f'${val}', green)
+
+
+def c_nick(name):
+	return color(str(name), cyan)
+
+
+def c_cmd(command):
+	return color(str(command), pink)
+
+
+def c_arg(text):
+	return color(str(text), grey)
+
+
+def _log(msg):
+	print(f'{time.strftime("%H:%M:%S")} | {msg}')
+
+
+# --- Card Display (IRC-formatted) ---
+
+def format_card(rank, suit):
+	sym, is_red = SUITS[suit]
+	return color(f'{rank}{sym}', red if is_red else black, white)
+
+
+def format_hand(cards, hide_first=False):
+	if hide_first and len(cards) > 1:
+		return color('[??]', grey, white) + ' ' + ' '.join(format_card(r, s) for r, s in cards[1:])
+	return ' '.join(format_card(r, s) for r, s in cards)
+
+
+def render_hand(cards, hide_first=False):
+	lines = [[] for _ in range(5)]
+	for i, (rank, suit) in enumerate(cards):
+		if hide_first and i == 0:
+			for j in range(5):
+				lines[j].append(color(FACEDOWN[j], light_blue, blue))
+		else:
+			sym, is_red = SUITS[suit]
+			card_color = red if is_red else black
+			art = CARD_ART[rank]
+			for j in range(5):
+				lines[j].append(color(art[j].replace('X', sym), card_color, white))
+	return [' '.join(line) for line in lines]
+
+
+# --- IRC Bot ---
 
 class IRC:
 	def __init__(self):
@@ -36,6 +114,9 @@ class IRC:
 		self.db   = None
 		self.shoe = Shoe(NUM_DECKS)
 		self.lock = threading.Lock()
+
+		# Display
+		self.mini_mode = False
 
 		# Blackjack state
 		self.state       = 'idle'
@@ -69,7 +150,7 @@ class IRC:
 			self.raw(f'USER {config.ident.username} 0 * :{config.ident.realname}')
 			self.raw('NICK ' + config.ident.nickname)
 		except socket.error as ex:
-			debug.error('Failed to connect to IRC server.', ex)
+			_log(f'[!] Failed to connect to IRC server: {ex}')
 			self.event_disconnect()
 		else:
 			self.listen()
@@ -99,15 +180,17 @@ class IRC:
 		self.raw(f'PRIVMSG {chan} :\x0f')
 		time.sleep(0.1)
 
-	def show_cards(self, chan, label, cards, hide_first=False):
-		lines = render_hand(cards, hide_first)
-		self.sendmsg(chan, label)
-		for line in lines:
-			self.raw(f'PRIVMSG {chan} :{line}')
-			time.sleep(0.1)
-
-	def action(self, chan, msg):
-		self.sendmsg(chan, f'\x01ACTION {msg}\x01')
+	def show_cards(self, target, label, cards, hide_first=False):
+		is_channel = target[0] in '#&'
+		if is_channel and self.mini_mode:
+			compact = format_hand(cards, hide_first)
+			self.sendmsg(target, f'{label} {compact}')
+		else:
+			lines = render_hand(cards, hide_first)
+			self.sendmsg(target, label)
+			for line in lines:
+				self.raw(f'PRIVMSG {target} :{line}')
+				time.sleep(0.1)
 
 	def join(self, chan, key=None):
 		self.raw(f'JOIN {chan} {key}') if key else self.raw(f'JOIN {chan}')
@@ -121,18 +204,17 @@ class IRC:
 				data = self.sock.recv(4096).decode('utf-8')
 				if data:
 					for line in (l for l in data.split('\r\n') if l):
-						debug.irc(line)
 						if line.startswith('ERROR :Closing Link:'):
 							raise Exception('Connection has closed.')
 						elif len(line.split()) >= 2:
 							self.handle_events(line)
 				else:
-					debug.error('No data received from server.')
+					_log('[!] No data received from server.')
 					break
 			except (UnicodeDecodeError, UnicodeEncodeError):
-				debug.error('Unicode error occurred.')
+				_log('[!] Unicode error occurred.')
 			except Exception as ex:
-				debug.error('Unexpected error occurred.', ex)
+				_log(f'[!] Unexpected error: {ex}')
 				break
 		self.event_disconnect()
 
@@ -143,7 +225,7 @@ class IRC:
 		elif args[1] == '001':
 			self.event_connect()
 		elif args[1] == '433':
-			debug.error_exit('Nickname is already in use.')
+			raise SystemExit('Nickname is already in use.')
 		elif args[1] in ('KICK', 'PART', 'PRIVMSG', 'QUIT'):
 			nick = args[0].split('!')[0][1:]
 			if nick != config.ident.nickname:
@@ -201,21 +283,16 @@ class IRC:
 		cmd = parts[0].lower()
 
 		try:
-			# Blackjack
 			if   cmd in ('!blackjack', '!bj'):   self.cmd_blackjack(nick, chan, parts[1:])
 			elif cmd == '!hit':                   self.cmd_hit(nick, chan)
 			elif cmd == '!stand':                 self.cmd_stand(nick, chan)
 			elif cmd in ('!double', '!dd'):       self.cmd_double(nick, chan)
-
-			# Poker
 			elif cmd in ('!poker', '!pk'):        self.cmd_poker(nick, chan)
 			elif cmd == '!fold':                  self.cmd_fold(nick, chan)
 			elif cmd == '!check':                 self.cmd_check(nick, chan)
 			elif cmd == '!call':                  self.cmd_call(nick, chan)
 			elif cmd in ('!raise', '!bet'):       self.cmd_raise(nick, chan, parts[1:])
 			elif cmd == '!allin':                 self.cmd_allin(nick, chan)
-
-			# Shared
 			elif cmd == '!deal':
 				if self.state == 'lobby':         self.cmd_deal(nick, chan)
 				elif self.pk_state == 'lobby':    self.cmd_pk_deal(nick, chan)
@@ -223,9 +300,25 @@ class IRC:
 			elif cmd == '!chips':                 self.cmd_chips(nick, chan)
 			elif cmd == '!top':                   self.cmd_top(nick, chan)
 			elif cmd == '!help':                  self.cmd_help(nick, chan)
+			elif cmd == '!mini':                  self.cmd_mini(nick, chan)
 		except Exception as ex:
-			debug.error(f'Command error ({cmd}): {ex}')
+			_log(f'[!] Command error ({cmd}): {ex}')
 			self.sendmsg(chan, f'{color("ERROR", red)} {ex}')
+
+	# ──────────────────── Helpers ────────────────────
+
+	def _game_busy(self, chan, allowed=None):
+		if self.state != 'idle' and allowed != 'blackjack':
+			names = ', '.join(c_nick(p.nick) for p in self.players)
+			status = 'lobby' if self.state == 'lobby' else 'round'
+			self.sendmsg(chan, f'{color("ERROR", red)} Blackjack {status} in progress with {names}. Wait for it to finish.')
+			return True
+		if self.pk_state != 'idle' and allowed != 'poker':
+			names = ', '.join(c_nick(p.nick) for p in self.pk_players)
+			status = 'lobby' if self.pk_state == 'lobby' else 'hand'
+			self.sendmsg(chan, f'{color("ERROR", red)} Poker {status} in progress with {names}. Wait for it to finish.')
+			return True
+		return False
 
 	# ──────────────────── Database ────────────────────
 
@@ -235,14 +328,13 @@ class IRC:
 		self.db = PickleDB(db_path)
 		self.db.load()
 		threading.Thread(target=self._db_sync_loop, daemon=True).start()
-		debug.irc('Chip database loaded.')
+		_log('Chip database loaded.')
 
 	def _db_sync_loop(self):
 		while True:
 			time.sleep(DB_SYNC_INTERVAL)
 			if self.db:
 				self.db.save()
-				debug.irc('Database synced to disk.')
 
 	def get_player_data(self, nick):
 		key  = nick.lower()
@@ -270,8 +362,7 @@ class IRC:
 
 	def cmd_blackjack(self, nick, chan, args):
 		with self.lock:
-			if self.pk_state != 'idle':
-				self.sendmsg(chan, f'{color("ERROR", red)} Wait for the poker game to finish first.')
+			if self._game_busy(chan, allowed='blackjack'):
 				return
 
 			bet = DEFAULT_BET
@@ -282,15 +373,15 @@ class IRC:
 					self.sendmsg(chan, f'{color("ERROR", red)} Invalid bet amount.')
 					return
 				if bet < MIN_BET:
-					self.sendmsg(chan, f'{color("ERROR", red)} Minimum bet is ${MIN_BET}.')
+					self.sendmsg(chan, f'{color("ERROR", red)} Minimum bet is {c_money(MIN_BET)}.')
 					return
 				if bet > MAX_BET:
-					self.sendmsg(chan, f'{color("ERROR", red)} Maximum bet is ${MAX_BET:,}.')
+					self.sendmsg(chan, f'{color("ERROR", red)} Maximum bet is {c_money(MAX_BET)}.')
 					return
 
 			chips = self.get_chips(nick)
 			if chips < bet:
-				self.sendmsg(chan, f'{color("ERROR", red)} {nick}: you have ${chips:,}. Use {bold}!chips{bold} to reset if broke.')
+				self.sendmsg(chan, f'{color("ERROR", red)} {c_nick(nick)}: you have {c_money(chips)}. Use {c_cmd("!chips")} to reset if broke.')
 				return
 
 			if self.state == 'idle':
@@ -299,35 +390,36 @@ class IRC:
 				self.dealer_hand = []
 				self.current_idx = 0
 				self.sendmsg(chan, f'{bold}{color(BJ_HEADER, white, green)}{bold}')
-				self.sendmsg(chan, f'{nick} opened a table! Type {bold}!blackjack [bet]{bold} to join or {bold}!deal{bold} to start.')
-				self.sendmsg(chan, f'{nick} bets {bold}${bet:,}{bold} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
+				self.sendmsg(chan, f'{c_nick(nick)} opened a table! Type {c_cmd("!blackjack")} {c_arg("[bet]")} to join or {c_cmd("!deal")} to start.')
+				self.sendmsg(chan, f'{c_nick(nick)} bets {c_money(bet)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._lobby_expired, [chan])
 				self.lobby_timer.daemon = True
 				self.lobby_timer.start()
 
 			elif self.state == 'lobby':
 				if any(p.nick.lower() == nick.lower() for p in self.players):
-					self.sendmsg(chan, f'{nick}: you are already at the table.')
+					self.sendmsg(chan, f'{c_nick(nick)}: you are already at the table.')
 					return
 				if len(self.players) >= MAX_PLAYERS:
 					self.sendmsg(chan, f'{color("ERROR", red)} Table is full ({MAX_PLAYERS} players).')
 					return
 				self.players.append(Player(nick, bet))
-				self.sendmsg(chan, f'{nick} joins the table! ({bold}${bet:,}{bold} bet) [{len(self.players)}/{MAX_PLAYERS}]')
+				self.sendmsg(chan, f'{c_nick(nick)} joins the table! ({c_money(bet)} bet) [{len(self.players)}/{MAX_PLAYERS}]')
 				if len(self.players) >= MAX_PLAYERS:
 					if self.lobby_timer:
 						self.lobby_timer.cancel()
 					self._start_round(chan)
 
 			elif self.state == 'playing':
-				self.sendmsg(chan, f'{color("ERROR", red)} A round is in progress. Wait for it to finish.')
+				names = ', '.join(c_nick(p.nick) for p in self.players)
+				self.sendmsg(chan, f'{color("ERROR", red)} Round in progress with {names}. Wait for it to finish.')
 
 	def cmd_deal(self, nick, chan):
 		with self.lock:
 			if self.state != 'lobby':
 				return
 			if nick.lower() != self.players[0].nick.lower():
-				self.sendmsg(chan, f'{color("ERROR", red)} Only {self.players[0].nick} can start the deal.')
+				self.sendmsg(chan, f'{color("ERROR", red)} Only {c_nick(self.players[0].nick)} can start the deal.')
 				return
 			if self.lobby_timer:
 				self.lobby_timer.cancel()
@@ -342,7 +434,7 @@ class IRC:
 			current = self.players[self.current_idx]
 			if nick.lower() != current.nick.lower():
 				if any(p.nick.lower() == nick.lower() for p in self.players):
-					self.sendmsg(chan, f"{nick}: it's {bold}{current.nick}'s{bold} turn.")
+					self.sendmsg(chan, f"{c_nick(nick)}: it's {c_nick(current.nick)}'s turn.")
 				return
 
 			card = self.shoe.draw()
@@ -351,14 +443,14 @@ class IRC:
 
 			if current.total > 21:
 				current.status = 'busted'
-				self.show_cards(chan, f'{bold}[{current.nick}]{bold} ({color(str(current.total), light_blue)}) \u2014 {color("BUST!", red)}', current.hand)
+				self.show_cards(chan, f'{bold}[{c_nick(current.nick)}]{bold} ({color(str(current.total), light_blue)}) \u2014 {color("BUST!", red)}', current.hand)
 				self._next_player(chan)
 			elif current.total == 21:
 				current.status = 'stood'
-				self.show_cards(chan, f'{bold}[{current.nick}]{bold} ({color(str(current.total), light_blue)}) \u2014 {color("21!", green)}', current.hand)
+				self.show_cards(chan, f'{bold}[{c_nick(current.nick)}]{bold} ({color(str(current.total), light_blue)}) \u2014 {color("21!", green)}', current.hand)
 				self._next_player(chan)
 			else:
-				self.show_cards(chan, f'{bold}[{current.nick}]{bold} ({color(str(current.total), light_blue)})', current.hand)
+				self.show_cards(chan, f'{bold}[{c_nick(current.nick)}]{bold} ({color(str(current.total), light_blue)})', current.hand)
 
 	def cmd_stand(self, nick, chan):
 		with self.lock:
@@ -371,7 +463,7 @@ class IRC:
 				return
 			current.status = 'stood'
 			self.last_move = time.time()
-			self.sendmsg(chan, f'{current.nick} stands at {bold}{current.total}{bold}.')
+			self.sendmsg(chan, f'{c_nick(current.nick)} stands at {bold}{current.total}{bold}.')
 			self._next_player(chan)
 
 	def cmd_double(self, nick, chan):
@@ -388,35 +480,34 @@ class IRC:
 				return
 			chips = self.get_chips(nick)
 			if chips < current.bet * 2:
-				self.sendmsg(chan, f'{color("ERROR", red)} Need ${current.bet * 2:,} to double down (you have ${chips:,}).')
+				self.sendmsg(chan, f'{color("ERROR", red)} Need {c_money(current.bet * 2)} to double down (you have {c_money(chips)}).')
 				return
 
 			current.bet *= 2
 			card = self.shoe.draw()
 			current.hand.append(card)
 			self.last_move = time.time()
-			self.sendmsg(chan, f'{bold}{current.nick}{bold} doubles down! Bet is now {bold}${current.bet:,}{bold}')
+			self.sendmsg(chan, f'{c_nick(current.nick)} doubles down! Bet is now {c_money(current.bet)}')
 
 			if current.total > 21:
 				current.status = 'busted'
-				self.show_cards(chan, f'{bold}[{current.nick}]{bold} ({color(str(current.total), light_blue)}) \u2014 {color("BUST!", red)}', current.hand)
+				self.show_cards(chan, f'{bold}[{c_nick(current.nick)}]{bold} ({color(str(current.total), light_blue)}) \u2014 {color("BUST!", red)}', current.hand)
 			else:
 				current.status = 'stood'
-				self.show_cards(chan, f'{bold}[{current.nick}]{bold} ({color(str(current.total), light_blue)})', current.hand)
+				self.show_cards(chan, f'{bold}[{c_nick(current.nick)}]{bold} ({color(str(current.total), light_blue)})', current.hand)
 			self._next_player(chan)
 
 	# ──────────────────── Poker Commands ────────────────────
 
 	def cmd_poker(self, nick, chan):
 		with self.lock:
-			if self.state != 'idle':
-				self.sendmsg(chan, f'{color("ERROR", red)} Wait for the blackjack game to finish first.')
+			if self._game_busy(chan, allowed='poker'):
 				return
 
 			if self.pk_state == 'idle':
 				chips = self.get_chips(nick)
 				if chips < BIG_BLIND:
-					self.sendmsg(chan, f'{color("ERROR", red)} {nick}: need at least ${BIG_BLIND} to play. Use {bold}!chips{bold}.')
+					self.sendmsg(chan, f'{color("ERROR", red)} {c_nick(nick)}: need at least {c_money(BIG_BLIND)} to play. Use {c_cmd("!chips")}.')
 					return
 				self.pk_state   = 'lobby'
 				self.pk_players = [PokerPlayer(nick)]
@@ -424,32 +515,33 @@ class IRC:
 				self.pk_current_bet = 0
 				self.pk_cards_shown = False
 				self.sendmsg(chan, f'{bold}{color(POKER_HEADER, white, green)}{bold}')
-				self.sendmsg(chan, f'{nick} opened a poker table! Type {bold}!poker{bold} to join or {bold}!deal{bold} to start.')
-				self.sendmsg(chan, f'Blinds: ${SMALL_BLIND}/${BIG_BLIND} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
+				self.sendmsg(chan, f'{c_nick(nick)} opened a poker table! Type {c_cmd("!poker")} to join or {c_cmd("!deal")} to start.')
+				self.sendmsg(chan, f'Blinds: {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.pk_lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._pk_lobby_expired, [chan])
 				self.pk_lobby_timer.daemon = True
 				self.pk_lobby_timer.start()
 
 			elif self.pk_state == 'lobby':
 				if any(p.nick.lower() == nick.lower() for p in self.pk_players):
-					self.sendmsg(chan, f'{nick}: you are already at the table.')
+					self.sendmsg(chan, f'{c_nick(nick)}: you are already at the table.')
 					return
 				if len(self.pk_players) >= MAX_PLAYERS:
 					self.sendmsg(chan, f'{color("ERROR", red)} Table is full ({MAX_PLAYERS} players).')
 					return
 				chips = self.get_chips(nick)
 				if chips < BIG_BLIND:
-					self.sendmsg(chan, f'{color("ERROR", red)} {nick}: need at least ${BIG_BLIND} to play.')
+					self.sendmsg(chan, f'{color("ERROR", red)} {c_nick(nick)}: need at least {c_money(BIG_BLIND)} to play.')
 					return
 				self.pk_players.append(PokerPlayer(nick))
-				self.sendmsg(chan, f'{nick} joins the table! [{len(self.pk_players)}/{MAX_PLAYERS}]')
+				self.sendmsg(chan, f'{c_nick(nick)} joins the table! [{len(self.pk_players)}/{MAX_PLAYERS}]')
 				if len(self.pk_players) >= MAX_PLAYERS:
 					if self.pk_lobby_timer:
 						self.pk_lobby_timer.cancel()
 					self._pk_start_hand(chan)
 
 			elif self.pk_state == 'playing':
-				self.sendmsg(chan, f'{color("ERROR", red)} A poker hand is in progress. Wait for it to finish.')
+				names = ', '.join(c_nick(p.nick) for p in self.pk_players)
+				self.sendmsg(chan, f'{color("ERROR", red)} Poker hand in progress with {names}. Wait for it to finish.')
 
 	def cmd_pk_deal(self, nick, chan):
 		with self.lock:
@@ -459,7 +551,7 @@ class IRC:
 				self.sendmsg(chan, f'{color("ERROR", red)} Need at least 2 players to start.')
 				return
 			if nick.lower() != self.pk_players[0].nick.lower():
-				self.sendmsg(chan, f'{color("ERROR", red)} Only {self.pk_players[0].nick} can start the deal.')
+				self.sendmsg(chan, f'{color("ERROR", red)} Only {c_nick(self.pk_players[0].nick)} can start the deal.')
 				return
 			if self.pk_lobby_timer:
 				self.pk_lobby_timer.cancel()
@@ -474,7 +566,7 @@ class IRC:
 				return
 			current.folded = True
 			current.acted  = True
-			self.sendmsg(chan, f'{bold}{current.nick}{bold} folds.')
+			self.sendmsg(chan, f'{c_nick(current.nick)} folds.')
 			self._pk_after_action(chan)
 
 	def cmd_check(self, nick, chan):
@@ -486,10 +578,10 @@ class IRC:
 				return
 			if current.bet < self.pk_current_bet:
 				to_call = self.pk_current_bet - current.bet
-				self.sendmsg(chan, f'{color("ERROR", red)} Cannot check \u2014 ${to_call} to call. Use {bold}!call{bold}, {bold}!raise{bold}, or {bold}!fold{bold}.')
+				self.sendmsg(chan, f'{color("ERROR", red)} Cannot check \u2014 {c_money(to_call)} to call. Use {c_cmd("!call")}, {c_cmd("!raise")}, or {c_cmd("!fold")}.')
 				return
 			current.acted = True
-			self.sendmsg(chan, f'{bold}{current.nick}{bold} checks.')
+			self.sendmsg(chan, f'{c_nick(current.nick)} checks.')
 			self._pk_after_action(chan)
 
 	def cmd_call(self, nick, chan):
@@ -501,7 +593,7 @@ class IRC:
 				return
 			to_call = self.pk_current_bet - current.bet
 			if to_call <= 0:
-				self.sendmsg(chan, f'{color("ERROR", red)} Nothing to call. Use {bold}!check{bold}.')
+				self.sendmsg(chan, f'{color("ERROR", red)} Nothing to call. Use {c_cmd("!check")}.')
 				return
 
 			available = self.get_chips(current.nick) - current.total_bet
@@ -515,9 +607,9 @@ class IRC:
 
 			pot = sum(p.total_bet for p in self.pk_players)
 			if current.all_in:
-				self.sendmsg(chan, f'{bold}{current.nick}{bold} calls all-in ${to_call} (Pot: ${pot:,})')
+				self.sendmsg(chan, f'{c_nick(current.nick)} calls all-in {c_money(to_call)} (Pot: {c_money(pot)})')
 			else:
-				self.sendmsg(chan, f'{bold}{current.nick}{bold} calls ${to_call} (Pot: ${pot:,})')
+				self.sendmsg(chan, f'{c_nick(current.nick)} calls {c_money(to_call)} (Pot: {c_money(pot)})')
 			self._pk_after_action(chan)
 
 	def cmd_raise(self, nick, chan, args):
@@ -528,7 +620,7 @@ class IRC:
 			if nick.lower() != current.nick.lower():
 				return
 			if not args:
-				self.sendmsg(chan, f'{color("ERROR", red)} Usage: {bold}!raise <total>{bold} (e.g. !raise {self.pk_current_bet + self.pk_min_raise})')
+				self.sendmsg(chan, f'{color("ERROR", red)} Usage: {c_cmd("!raise")} {c_arg("<total>")} (e.g. !raise {self.pk_current_bet + self.pk_min_raise})')
 				return
 			try:
 				raise_to = int(args[0])
@@ -538,13 +630,13 @@ class IRC:
 
 			min_total = self.pk_current_bet + self.pk_min_raise
 			if raise_to < min_total:
-				self.sendmsg(chan, f'{color("ERROR", red)} Minimum raise is to ${min_total}.')
+				self.sendmsg(chan, f'{color("ERROR", red)} Minimum raise is to {c_money(min_total)}.')
 				return
 
 			cost = raise_to - current.bet
 			available = self.get_chips(current.nick) - current.total_bet
 			if cost > available:
-				self.sendmsg(chan, f'{color("ERROR", red)} Not enough chips. You can bet up to ${current.bet + available}. Use {bold}!allin{bold}.')
+				self.sendmsg(chan, f'{color("ERROR", red)} Not enough chips. You can bet up to {c_money(current.bet + available)}. Use {c_cmd("!allin")}.')
 				return
 
 			raise_diff = raise_to - self.pk_current_bet
@@ -559,7 +651,7 @@ class IRC:
 					p.acted = False
 
 			pot = sum(p.total_bet for p in self.pk_players)
-			self.sendmsg(chan, f'{bold}{current.nick}{bold} raises to ${raise_to} (Pot: ${pot:,})')
+			self.sendmsg(chan, f'{c_nick(current.nick)} raises to {c_money(raise_to)} (Pot: {c_money(pot)})')
 			self._pk_after_action(chan)
 
 	def cmd_allin(self, nick, chan):
@@ -591,7 +683,7 @@ class IRC:
 				self.pk_current_bet = allin_total
 
 			pot = sum(p.total_bet for p in self.pk_players)
-			self.sendmsg(chan, f'{bold}{current.nick}{bold} goes ALL-IN for ${available}! (Pot: ${pot:,})')
+			self.sendmsg(chan, f'{c_nick(current.nick)} goes ALL-IN for {c_money(available)}! (Pot: {c_money(pot)})')
 			self._pk_after_action(chan)
 
 	# ──────────────────── Shared Commands ────────────────────
@@ -602,7 +694,7 @@ class IRC:
 				idx = next((i for i, p in enumerate(self.players) if p.nick.lower() == nick.lower()), None)
 				if idx is not None:
 					self.players.pop(idx)
-					self.sendmsg(chan, f'{nick} left the table. [{len(self.players)}/{MAX_PLAYERS}]')
+					self.sendmsg(chan, f'{c_nick(nick)} left the table. [{len(self.players)}/{MAX_PLAYERS}]')
 					if not self.players:
 						if self.lobby_timer:
 							self.lobby_timer.cancel()
@@ -613,7 +705,7 @@ class IRC:
 				idx = next((i for i, p in enumerate(self.pk_players) if p.nick.lower() == nick.lower()), None)
 				if idx is not None:
 					self.pk_players.pop(idx)
-					self.sendmsg(chan, f'{nick} left the poker table. [{len(self.pk_players)}/{MAX_PLAYERS}]')
+					self.sendmsg(chan, f'{c_nick(nick)} left the poker table. [{len(self.pk_players)}/{MAX_PLAYERS}]')
 					if not self.pk_players:
 						if self.pk_lobby_timer:
 							self.pk_lobby_timer.cancel()
@@ -628,22 +720,22 @@ class IRC:
 			if last_reset == 0:
 				data['last_reset'] = time.time()
 				self.set_player_data(nick, data)
-				self.sendmsg(chan, f'{nick}: you are broke. Chip reset available in {bold}24h{bold}.')
+				self.sendmsg(chan, f'{c_nick(nick)}: you are broke. Chip reset available in {bold}24h{bold}.')
 			else:
 				elapsed = time.time() - last_reset
 				if elapsed >= RESET_COOLDOWN:
 					data['chips']      = STARTING_CHIPS
 					data['last_reset'] = 0
 					self.set_player_data(nick, data)
-					self.sendmsg(nick, f'You have been given ${STARTING_CHIPS:,} in chips. Good luck!')
-					self.sendmsg(chan, f'{nick} has received a {bold}${STARTING_CHIPS:,}{bold} chip reset!')
+					self.sendmsg(nick, f'You have been given {c_money(STARTING_CHIPS)} in chips. Good luck!')
+					self.sendmsg(chan, f'{c_nick(nick)} has received a {c_money(STARTING_CHIPS)} chip reset!')
 				else:
 					remaining = RESET_COOLDOWN - elapsed
 					hours     = int(remaining // 3600)
 					minutes   = int((remaining % 3600) // 60)
-					self.sendmsg(chan, f'{nick}: broke. Reset in {bold}{hours}h {minutes}m{bold}.')
+					self.sendmsg(chan, f'{c_nick(nick)}: broke. Reset in {bold}{hours}h {minutes}m{bold}.')
 		else:
-			self.sendmsg(chan, f'{nick} has {bold}${chips:,}{bold} in chips.')
+			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips.')
 
 	def cmd_top(self, nick, chan):
 		all_keys = self.db.all()
@@ -658,18 +750,23 @@ class IRC:
 		leaderboard.sort(key=lambda x: x[1], reverse=True)
 		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", white, green)}{bold}')
 		for i, (name, chips) in enumerate(leaderboard[:10], 1):
-			self.sendmsg(chan, f' {bold}#{i}{bold} {name} \u2014 ${chips:,}')
+			self.sendmsg(chan, f' {bold}#{i}{bold} {c_nick(name)} \u2014 {c_money(chips)}')
 
 	def cmd_help(self, nick, chan):
 		self.sendmsg(chan, f'{bold}{color(" COMMANDS ", white, green)}{bold}')
 		self.sendmsg(chan, f' {bold}\u2500\u2500 Blackjack \u2500\u2500{bold}')
-		self.sendmsg(chan, f' {bold}!blackjack [bet]{bold} \u2014 Start or join (default: ${DEFAULT_BET})')
-		self.sendmsg(chan, f' {bold}!hit{bold} \u2014 Draw a card  |  {bold}!stand{bold} \u2014 Keep hand  |  {bold}!double{bold} \u2014 Double down')
+		self.sendmsg(chan, f' {c_cmd("!blackjack")} {c_arg("[bet]")} \u2014 Start or join (default: {c_money(DEFAULT_BET)})')
+		self.sendmsg(chan, f' {c_cmd("!hit")} \u2014 Draw a card  |  {c_cmd("!stand")} \u2014 Keep hand  |  {c_cmd("!double")} \u2014 Double down')
 		self.sendmsg(chan, f' {bold}\u2500\u2500 Poker \u2500\u2500{bold}')
-		self.sendmsg(chan, f' {bold}!poker{bold} \u2014 Start or join a table (blinds ${SMALL_BLIND}/${BIG_BLIND})')
-		self.sendmsg(chan, f' {bold}!check{bold} | {bold}!call{bold} | {bold}!raise <amt>{bold} | {bold}!fold{bold} | {bold}!allin{bold}')
+		self.sendmsg(chan, f' {c_cmd("!poker")} \u2014 Start or join a table (blinds {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)})')
+		self.sendmsg(chan, f' {c_cmd("!check")} | {c_cmd("!call")} | {c_cmd("!raise")} {c_arg("<amt>")} | {c_cmd("!fold")} | {c_cmd("!allin")}')
 		self.sendmsg(chan, f' {bold}\u2500\u2500 General \u2500\u2500{bold}')
-		self.sendmsg(chan, f' {bold}!deal{bold} \u2014 Force deal  |  {bold}!leave{bold} \u2014 Leave lobby  |  {bold}!chips{bold} \u2014 Check/reset chips  |  {bold}!top{bold} \u2014 Leaderboard')
+		self.sendmsg(chan, f' {c_cmd("!deal")} \u2014 Force deal  |  {c_cmd("!leave")} \u2014 Leave lobby  |  {c_cmd("!chips")} \u2014 Check/reset chips  |  {c_cmd("!top")} \u2014 Leaderboard  |  {c_cmd("!mini")} \u2014 Toggle compact cards')
+
+	def cmd_mini(self, nick, chan):
+		self.mini_mode = not self.mini_mode
+		mode = 'compact' if self.mini_mode else 'full-size'
+		self.sendmsg(chan, f'Card display set to {bold}{mode}{bold}.')
 
 	# ──────────────────── Blackjack Logic ────────────────────
 
@@ -697,7 +794,7 @@ class IRC:
 			if player.is_blackjack:
 				player.status = 'blackjack'
 				bj = f' {color("BLACKJACK!", green)}'
-			self.show_cards(chan, f'{bold}[{player.nick}]{bold} ({color(str(player.total), light_blue)}){bj}', player.hand)
+			self.show_cards(chan, f'{bold}[{c_nick(player.nick)}]{bold} ({color(str(player.total), light_blue)}){bj}', player.hand)
 			self.blank(chan)
 
 		self.last_move = time.time()
@@ -710,9 +807,9 @@ class IRC:
 				p = self.players[self.current_idx]
 				self.last_move = time.time()
 				if len(p.hand) == 2:
-					self.sendmsg(chan, f"{p.nick}: your turn \u2014 {bold}!hit{bold}, {bold}!stand{bold}, or {bold}!double{bold}")
+					self.sendmsg(chan, f"{c_nick(p.nick)}: your turn \u2014 {c_cmd('!hit')}, {c_cmd('!stand')}, or {c_cmd('!double')}")
 				else:
-					self.sendmsg(chan, f"{p.nick}: your turn \u2014 {bold}!hit{bold} or {bold}!stand{bold}")
+					self.sendmsg(chan, f"{c_nick(p.nick)}: your turn \u2014 {c_cmd('!hit')} or {c_cmd('!stand')}")
 				return
 			self.current_idx += 1
 		self._dealer_turn(chan)
@@ -751,27 +848,27 @@ class IRC:
 		for p in self.players:
 			if p.status == 'busted':
 				new_chips = self.add_chips(p.nick, -p.bet)
-				self.sendmsg(chan, f' {color(sym_cross, red)} {bold}{p.nick}{bold} busted ({bold}-${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} busted ({color("-", red)}{c_money(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 			elif p.status == 'blackjack':
 				if dealer_bj:
 					chips = self.get_chips(p.nick)
-					self.sendmsg(chan, f' {color(sym_dash, yellow)} {bold}{p.nick}{bold} push \u2014 both blackjack {sym_arrow} ${chips:,}')
+					self.sendmsg(chan, f' {color(sym_dash, yellow)} {c_nick(p.nick)} push \u2014 both blackjack {sym_arrow} {c_money(chips)}')
 				else:
 					win = int(p.bet * 1.5)
 					new_chips = self.add_chips(p.nick, win)
-					self.sendmsg(chan, f' {color(sym_star, green)} {bold}{p.nick}{bold} {color("BLACKJACK", green)} ({bold}+${win:,}{bold}) {sym_arrow} ${new_chips:,}')
+					self.sendmsg(chan, f' {color(sym_star, green)} {c_nick(p.nick)} {color("BLACKJACK", green)} ({color("+", green)}{c_money(win)}) {sym_arrow} {c_money(new_chips)}')
 			elif dealer_bust:
 				new_chips = self.add_chips(p.nick, p.bet)
-				self.sendmsg(chan, f' {color(sym_check, green)} {bold}{p.nick}{bold} wins ({bold}+${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_check, green)} {c_nick(p.nick)} wins ({color("+", green)}{c_money(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 			elif p.total > dtotal:
 				new_chips = self.add_chips(p.nick, p.bet)
-				self.sendmsg(chan, f' {color(sym_check, green)} {bold}{p.nick}{bold} wins {p.total} vs {dtotal} ({bold}+${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_check, green)} {c_nick(p.nick)} wins {p.total} vs {dtotal} ({color("+", green)}{c_money(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 			elif p.total == dtotal:
 				chips = self.get_chips(p.nick)
-				self.sendmsg(chan, f' {color(sym_dash, yellow)} {bold}{p.nick}{bold} push {p.total} vs {dtotal} {sym_arrow} ${chips:,}')
+				self.sendmsg(chan, f' {color(sym_dash, yellow)} {c_nick(p.nick)} push {p.total} vs {dtotal} {sym_arrow} {c_money(chips)}')
 			else:
 				new_chips = self.add_chips(p.nick, -p.bet)
-				self.sendmsg(chan, f' {color(sym_cross, red)} {bold}{p.nick}{bold} loses {p.total} vs {dtotal} ({bold}-${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses {p.total} vs {dtotal} ({color("-", red)}{c_money(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 
 		if self.db:
 			self.db.save()
@@ -789,7 +886,7 @@ class IRC:
 					current = self.players[self.current_idx]
 					if current.status == 'playing':
 						current.status = 'busted'
-						self.sendmsg(chan, f'{color("TIMEOUT!", red)} {current.nick} ran out of time and forfeits!')
+						self.sendmsg(chan, f'{color("TIMEOUT!", red)} {c_nick(current.nick)} ran out of time and forfeits!')
 						self._next_player(chan)
 
 	# ──────────────────── Poker Logic ────────────────────
@@ -843,21 +940,19 @@ class IRC:
 		self.pk_current_bet = bb_amt
 
 		self.sendmsg(chan, f'{bold}{color(" DEALING POKER ", white, orange)}{bold}')
-		self.sendmsg(chan, f'{sb.nick} posts small blind (${sb_amt})')
-		self.sendmsg(chan, f'{bb.nick} posts big blind (${bb_amt})')
+		self.sendmsg(chan, f'{c_nick(sb.nick)} posts small blind ({c_money(sb_amt)})')
+		self.sendmsg(chan, f'{c_nick(bb.nick)} posts big blind ({c_money(bb_amt)})')
 
 		for _ in range(2):
 			for p in self.pk_players:
 				p.hand.append(self.shoe.draw())
 
 		for p in self.pk_players:
-			c1 = format_card(*p.hand[0])
-			c2 = format_card(*p.hand[1])
-			self.sendmsg(p.nick, f'Your hole cards: {c1} {c2}')
+			self.show_cards(p.nick, 'Your hole cards:', p.hand)
 
 		self.sendmsg(chan, 'Hole cards dealt \u2014 check your PMs!')
 		pot = sum(p.total_bet for p in self.pk_players)
-		self.sendmsg(chan, f'Pot: {bold}${pot}{bold}')
+		self.sendmsg(chan, f'Pot: {c_money(pot)}')
 
 		self.pk_last_move = time.time()
 		threading.Thread(target=self._pk_move_timer, args=(chan,), daemon=True).start()
@@ -881,9 +976,9 @@ class IRC:
 		to_call = self.pk_current_bet - p.bet
 		self.pk_last_move = time.time()
 		if to_call > 0:
-			self.sendmsg(chan, f'Pot: {bold}${pot:,}{bold} | {p.nick}: {bold}!call{bold} ${to_call}, {bold}!raise{bold} <total>, {bold}!fold{bold}, or {bold}!allin{bold}')
+			self.sendmsg(chan, f'Pot: {c_money(pot)} | {c_nick(p.nick)}: {c_cmd("!call")} {c_money(to_call)}, {c_cmd("!raise")} {c_arg("<total>")}, {c_cmd("!fold")}, or {c_cmd("!allin")}')
 		else:
-			self.sendmsg(chan, f'Pot: {bold}${pot:,}{bold} | {p.nick}: {bold}!check{bold}, {bold}!raise{bold} <total>, or {bold}!fold{bold}')
+			self.sendmsg(chan, f'Pot: {c_money(pot)} | {c_nick(p.nick)}: {c_cmd("!check")}, {c_cmd("!raise")} {c_arg("<total>")}, or {c_cmd("!fold")}')
 
 	def _pk_after_action(self, chan):
 		active = [p for p in self.pk_players if not p.folded]
@@ -950,7 +1045,7 @@ class IRC:
 				self.pk_cards_shown = True
 				self.sendmsg(chan, f'{bold}Players are all-in \u2014 showing cards:{bold}')
 				for p in active:
-					self.sendmsg(chan, f' {bold}[{p.nick}]{bold} {format_card(*p.hand[0])} {format_card(*p.hand[1])}')
+					self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {format_card(*p.hand[0])} {format_card(*p.hand[1])}')
 			time.sleep(2)
 			self._pk_next_street(chan)
 			return
@@ -978,9 +1073,9 @@ class IRC:
 				rank = poker_best_hand(p.hand + self.pk_community)
 				evals[p.nick] = rank
 				name = poker_hand_name(rank)
-				self.sendmsg(chan, f' {bold}[{p.nick}]{bold} {format_card(*p.hand[0])} {format_card(*p.hand[1])} \u2014 {color(name, yellow)}')
+				self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {format_card(*p.hand[0])} {format_card(*p.hand[1])} \u2014 {color(name, yellow)}')
 			else:
-				self.sendmsg(chan, f' {bold}[{p.nick}]{bold} {color("folded", grey)}')
+				self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {color("folded", grey)}')
 
 		self.blank(chan)
 
@@ -1005,16 +1100,16 @@ class IRC:
 			new_chips = self.add_chips(p.nick, net)
 			if p.folded:
 				if p.total_bet > 0:
-					self.sendmsg(chan, f' {color(sym_cross, red)} {bold}{p.nick}{bold} folded ({bold}-${p.total_bet:,}{bold}) {sym_arrow} ${new_chips:,}')
+					self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} folded ({color("-", red)}{c_money(p.total_bet)}) {sym_arrow} {c_money(new_chips)}')
 				else:
-					self.sendmsg(chan, f' {color(sym_cross, red)} {bold}{p.nick}{bold} folded {sym_arrow} ${new_chips:,}')
+					self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} folded {sym_arrow} {c_money(new_chips)}')
 			elif net > 0:
 				name = poker_hand_name(evals.get(p.nick, (0,)))
-				self.sendmsg(chan, f' {color(sym_star, green)} {bold}{p.nick}{bold} wins ${won:,} ({name}) ({bold}+${net:,}{bold}) {sym_arrow} ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_star, green)} {c_nick(p.nick)} wins {c_money(won)} ({name}) ({color("+", green)}{c_money(net)}) {sym_arrow} {c_money(new_chips)}')
 			elif net == 0:
-				self.sendmsg(chan, f' {color(sym_dash, yellow)} {bold}{p.nick}{bold} breaks even {sym_arrow} ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_dash, yellow)} {c_nick(p.nick)} breaks even {sym_arrow} {c_money(new_chips)}')
 			else:
-				self.sendmsg(chan, f' {color(sym_cross, red)} {bold}{p.nick}{bold} loses ({bold}-${abs(net):,}{bold}) {sym_arrow} ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses ({color("-", red)}{c_money(abs(net))}) {sym_arrow} {c_money(new_chips)}')
 
 		if self.db:
 			self.db.save()
@@ -1022,7 +1117,7 @@ class IRC:
 
 	def _pk_win_by_fold(self, chan, winner):
 		total_pot = sum(p.total_bet for p in self.pk_players)
-		self.sendmsg(chan, f'{bold}{winner.nick}{bold} wins ${total_pot:,} \u2014 everyone else folded!')
+		self.sendmsg(chan, f'{c_nick(winner.nick)} wins {c_money(total_pot)} \u2014 everyone else folded!')
 
 		for p in self.pk_players:
 			if p.nick == winner.nick:
@@ -1046,7 +1141,7 @@ class IRC:
 					current = self.pk_players[self.pk_current_idx]
 					if not current.folded and not current.all_in and not current.acted:
 						current.folded = True
-						self.sendmsg(chan, f'{color("TIMEOUT!", red)} {current.nick} ran out of time \u2014 hand folded!')
+						self.sendmsg(chan, f'{color("TIMEOUT!", red)} {c_nick(current.nick)} ran out of time \u2014 hand folded!')
 						self._pk_after_action(chan)
 
 	def _pk_reset(self):
@@ -1064,12 +1159,11 @@ class IRC:
 
 	def player_left(self, nick, chan):
 		with self.lock:
-			# Blackjack
 			if self.state == 'lobby':
 				idx = next((i for i, p in enumerate(self.players) if p.nick.lower() == nick.lower()), None)
 				if idx is not None:
 					self.players.pop(idx)
-					self.sendmsg(chan, f'{nick} left the table. [{len(self.players)}/{MAX_PLAYERS}]')
+					self.sendmsg(chan, f'{c_nick(nick)} left the table. [{len(self.players)}/{MAX_PLAYERS}]')
 					if not self.players:
 						if self.lobby_timer:
 							self.lobby_timer.cancel()
@@ -1079,17 +1173,16 @@ class IRC:
 				for i, p in enumerate(self.players):
 					if p.nick.lower() == nick.lower() and p.status == 'playing':
 						p.status = 'busted'
-						self.sendmsg(chan, f'{nick} left \u2014 hand forfeited.')
+						self.sendmsg(chan, f'{c_nick(nick)} left \u2014 hand forfeited.')
 						if i == self.current_idx:
 							self._next_player(chan)
 						break
 
-			# Poker
 			if self.pk_state == 'lobby':
 				idx = next((i for i, p in enumerate(self.pk_players) if p.nick.lower() == nick.lower()), None)
 				if idx is not None:
 					self.pk_players.pop(idx)
-					self.sendmsg(chan, f'{nick} left the poker table. [{len(self.pk_players)}/{MAX_PLAYERS}]')
+					self.sendmsg(chan, f'{c_nick(nick)} left the poker table. [{len(self.pk_players)}/{MAX_PLAYERS}]')
 					if not self.pk_players:
 						if self.pk_lobby_timer:
 							self.pk_lobby_timer.cancel()
@@ -1099,7 +1192,7 @@ class IRC:
 				for i, p in enumerate(self.pk_players):
 					if p.nick.lower() == nick.lower() and not p.folded:
 						p.folded = True
-						self.sendmsg(chan, f'{nick} left \u2014 poker hand folded.')
+						self.sendmsg(chan, f'{c_nick(nick)} left \u2014 poker hand folded.')
 						active = [pp for pp in self.pk_players if not pp.folded]
 						if len(active) == 1:
 							self._pk_win_by_fold(chan, active[0])
