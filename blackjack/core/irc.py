@@ -39,6 +39,11 @@ RANK_VALUES = {'A':11, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '
 
 bold      = '\x02'
 reset     = '\x0f'
+sym_arrow = '\u2192'
+sym_check = '\u2713'
+sym_cross = '\u2717'
+sym_dash  = '\u2500'
+sym_star  = '\u2605'
 white     = '00'
 black     = '01'
 green     = '03'
@@ -512,7 +517,7 @@ class IRC:
 				card = self.shoe.draw()
 				self.dealer_hand.append(card)
 				dtotal = hand_value(self.dealer_hand)
-				self.sendmsg(chan, f'{bold}[Dealer]{bold} hits {format_card(*card)} \u2192 ({color(str(dtotal), light_blue)})')
+				self.sendmsg(chan, f'{bold}[Dealer]{bold} hits {format_card(*card)} {sym_arrow} ({color(str(dtotal), light_blue)})')
 
 		dealer_bust = dtotal > 21
 		dealer_bj   = len(self.dealer_hand) == 2 and dtotal == 21
@@ -527,27 +532,27 @@ class IRC:
 		for p in self.players:
 			if p.status == 'busted':
 				new_chips = self.add_chips(p.nick, -p.bet)
-				self.sendmsg(chan, f' {color("\u2717", red)} {bold}{p.nick}{bold} busted ({bold}-${p.bet:,}{bold}) \u2192 ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_cross, red)} {bold}{p.nick}{bold} busted ({bold}-${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
 			elif p.status == 'blackjack':
 				if dealer_bj:
 					chips = self.get_chips(p.nick)
-					self.sendmsg(chan, f' {color("\u2500", yellow)} {bold}{p.nick}{bold} push — both blackjack \u2192 ${chips:,}')
+					self.sendmsg(chan, f' {color(sym_dash, yellow)} {bold}{p.nick}{bold} push — both blackjack {sym_arrow} ${chips:,}')
 				else:
 					win = int(p.bet * 1.5)
 					new_chips = self.add_chips(p.nick, win)
-					self.sendmsg(chan, f' {color("\u2605", green)} {bold}{p.nick}{bold} {color("BLACKJACK", green)} ({bold}+${win:,}{bold}) \u2192 ${new_chips:,}')
+					self.sendmsg(chan, f' {color(sym_star, green)} {bold}{p.nick}{bold} {color("BLACKJACK", green)} ({bold}+${win:,}{bold}) {sym_arrow} ${new_chips:,}')
 			elif dealer_bust:
 				new_chips = self.add_chips(p.nick, p.bet)
-				self.sendmsg(chan, f' {color("\u2713", green)} {bold}{p.nick}{bold} wins ({bold}+${p.bet:,}{bold}) \u2192 ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_check, green)} {bold}{p.nick}{bold} wins ({bold}+${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
 			elif p.total > dtotal:
 				new_chips = self.add_chips(p.nick, p.bet)
-				self.sendmsg(chan, f' {color("\u2713", green)} {bold}{p.nick}{bold} wins {p.total} vs {dtotal} ({bold}+${p.bet:,}{bold}) \u2192 ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_check, green)} {bold}{p.nick}{bold} wins {p.total} vs {dtotal} ({bold}+${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
 			elif p.total == dtotal:
 				chips = self.get_chips(p.nick)
-				self.sendmsg(chan, f' {color("\u2500", yellow)} {bold}{p.nick}{bold} push {p.total} vs {dtotal} \u2192 ${chips:,}')
+				self.sendmsg(chan, f' {color(sym_dash, yellow)} {bold}{p.nick}{bold} push {p.total} vs {dtotal} {sym_arrow} ${chips:,}')
 			else:
 				new_chips = self.add_chips(p.nick, -p.bet)
-				self.sendmsg(chan, f' {color("\u2717", red)} {bold}{p.nick}{bold} loses {p.total} vs {dtotal} ({bold}-${p.bet:,}{bold}) \u2192 ${new_chips:,}')
+				self.sendmsg(chan, f' {color(sym_cross, red)} {bold}{p.nick}{bold} loses {p.total} vs {dtotal} ({bold}-${p.bet:,}{bold}) {sym_arrow} ${new_chips:,}')
 
 		if self.db:
 			self.db.dump()
