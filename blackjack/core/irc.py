@@ -35,10 +35,10 @@ BIG_BLIND        = 10
 
 # --- Card Data ---
 SUITS = {
-	'hearts'   : ('\u2764', True),
-	'diamonds' : ('\u2666', False),
-	'clubs'    : ('\u2663', False),
-	'spades'   : ('\u2660', False),
+	'hearts'   : ('❤', True),
+	'diamonds' : ('♦', True),
+	'clubs'    : ('♣', False),
+	'spades'   : ('♠', False),
 }
 RANKS       = ['A','2','3','4','5','6','7','8','9','10','J','Q','K']
 RANK_VALUES = {'A':11, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':10, 'Q':10, 'K':10}
@@ -431,28 +431,32 @@ class IRC:
 			return
 		cmd = parts[0].lower()
 
-		# Blackjack
-		if   cmd in ('!blackjack', '!bj'):   self.cmd_blackjack(nick, chan, parts[1:])
-		elif cmd == '!hit':                   self.cmd_hit(nick, chan)
-		elif cmd == '!stand':                 self.cmd_stand(nick, chan)
-		elif cmd in ('!double', '!dd'):       self.cmd_double(nick, chan)
+		try:
+			# Blackjack
+			if   cmd in ('!blackjack', '!bj'):   self.cmd_blackjack(nick, chan, parts[1:])
+			elif cmd == '!hit':                   self.cmd_hit(nick, chan)
+			elif cmd == '!stand':                 self.cmd_stand(nick, chan)
+			elif cmd in ('!double', '!dd'):       self.cmd_double(nick, chan)
 
-		# Poker
-		elif cmd in ('!poker', '!pk'):        self.cmd_poker(nick, chan)
-		elif cmd == '!fold':                  self.cmd_fold(nick, chan)
-		elif cmd == '!check':                 self.cmd_check(nick, chan)
-		elif cmd == '!call':                  self.cmd_call(nick, chan)
-		elif cmd in ('!raise', '!bet'):       self.cmd_raise(nick, chan, parts[1:])
-		elif cmd == '!allin':                 self.cmd_allin(nick, chan)
+			# Poker
+			elif cmd in ('!poker', '!pk'):        self.cmd_poker(nick, chan)
+			elif cmd == '!fold':                  self.cmd_fold(nick, chan)
+			elif cmd == '!check':                 self.cmd_check(nick, chan)
+			elif cmd == '!call':                  self.cmd_call(nick, chan)
+			elif cmd in ('!raise', '!bet'):       self.cmd_raise(nick, chan, parts[1:])
+			elif cmd == '!allin':                 self.cmd_allin(nick, chan)
 
-		# Shared
-		elif cmd == '!deal':
-			if self.state == 'lobby':         self.cmd_deal(nick, chan)
-			elif self.pk_state == 'lobby':    self.cmd_pk_deal(nick, chan)
-		elif cmd == '!leave':                 self.cmd_leave(nick, chan)
-		elif cmd == '!chips':                 self.cmd_chips(nick, chan)
-		elif cmd == '!top':                   self.cmd_top(nick, chan)
-		elif cmd == '!help':                  self.cmd_help(nick, chan)
+			# Shared
+			elif cmd == '!deal':
+				if self.state == 'lobby':         self.cmd_deal(nick, chan)
+				elif self.pk_state == 'lobby':    self.cmd_pk_deal(nick, chan)
+			elif cmd == '!leave':                 self.cmd_leave(nick, chan)
+			elif cmd == '!chips':                 self.cmd_chips(nick, chan)
+			elif cmd == '!top':                   self.cmd_top(nick, chan)
+			elif cmd == '!help':                  self.cmd_help(nick, chan)
+		except Exception as ex:
+			debug.error(f'Command error ({cmd}): {ex}')
+			self.sendmsg(chan, f'{color("ERROR", red)} {ex}')
 
 	# ──────────────────── Database ────────────────────
 
@@ -523,7 +527,7 @@ class IRC:
 				self.players = [Player(nick, bet)]
 				self.dealer_hand = []
 				self.current_idx = 0
-				self.sendmsg(chan, f'{bold}{color(" \u2660 \u2764  BLACKJACK  \u2666 \u2663 ", white, green)}{bold}')
+				self.sendmsg(chan, f'{bold}{color(" ♠ ❤  BLACKJACK  ♦ ♣ ", white, green)}{bold}')
 				self.sendmsg(chan, f'{nick} opened a table! Type {bold}!blackjack [bet]{bold} to join or {bold}!deal{bold} to start.')
 				self.sendmsg(chan, f'{nick} bets {bold}${bet:,}{bold} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._lobby_expired, [chan])
@@ -648,7 +652,7 @@ class IRC:
 				self.pk_community   = []
 				self.pk_current_bet = 0
 				self.pk_cards_shown = False
-				self.sendmsg(chan, f'{bold}{color(" \u2660 \u2764  TEXAS HOLD\'EM  \u2666 \u2663 ", white, green)}{bold}')
+				self.sendmsg(chan, f'{bold}{color(" ♠ ❤  TEXAS HOLD\'EM  ♦ ♣ ", white, green)}{bold}')
 				self.sendmsg(chan, f'{nick} opened a poker table! Type {bold}!poker{bold} to join or {bold}!deal{bold} to start.')
 				self.sendmsg(chan, f'Blinds: ${SMALL_BLIND}/${BIG_BLIND} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.pk_lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._pk_lobby_expired, [chan])
@@ -908,7 +912,8 @@ class IRC:
 
 		self.sendmsg(chan, f'{bold}{color(" CARDS DEALT ", white, orange)}{bold}')
 		self.show_cards(chan, f'{bold}[Dealer]{bold}', self.dealer_hand, hide_first=True)
-		self.sendmsg(chan, ' ')
+		self.raw(f'PRIVMSG {chan} :\x0f')
+		time.sleep(0.1)
 
 		for player in self.players:
 			bj = ''
@@ -916,7 +921,8 @@ class IRC:
 				player.status = 'blackjack'
 				bj = f' {color("BLACKJACK!", green)}'
 			self.show_cards(chan, f'{bold}[{player.nick}]{bold} ({color(str(player.total), light_blue)}){bj}', player.hand)
-			self.sendmsg(chan, ' ')
+			self.raw(f'PRIVMSG {chan} :\x0f')
+			time.sleep(0.1)
 
 		self.last_move = time.time()
 		threading.Thread(target=self._move_timer, args=(chan,), daemon=True).start()
@@ -1188,7 +1194,8 @@ class IRC:
 		pots  = poker_calculate_pots(self.pk_players)
 		self.sendmsg(chan, f'{bold}{color(" SHOWDOWN ", white, orange)}{bold}')
 		self.show_cards(chan, f'{bold}[Board]{bold}', self.pk_community)
-		self.sendmsg(chan, ' ')
+		self.raw(f'PRIVMSG {chan} :\x0f')
+		time.sleep(0.1)
 
 		evals = {}
 		for p in self.pk_players:
@@ -1200,7 +1207,8 @@ class IRC:
 			else:
 				self.sendmsg(chan, f' {bold}[{p.nick}]{bold} {color("folded", grey)}')
 
-		self.sendmsg(chan, ' ')
+		self.raw(f'PRIVMSG {chan} :\x0f')
+		time.sleep(0.1)
 
 		winnings = {}
 		for pot_amount, eligible in pots:
