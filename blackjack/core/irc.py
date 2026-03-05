@@ -63,6 +63,12 @@ def c_money(val):
 	return color(f'${val}', green)
 
 
+def c_loss(val):
+	if isinstance(val, (int, float)):
+		return color(f'-${abs(val):,}', red)
+	return color(f'-${val}', red)
+
+
 def c_nick(name):
 	return color(str(name), cyan)
 
@@ -313,6 +319,7 @@ class IRC:
 			elif cmd == '!top':                   self.cmd_top(nick, chan)
 			elif cmd == '!help':                  self.cmd_help(nick, chan)
 			elif cmd == '!mini':                  self.cmd_mini(nick, chan)
+			elif cmd == '!cheat':                 self.cmd_cheat(nick, chan)
 		except Exception as ex:
 			_log(f'[!] Command error ({cmd}): {ex}')
 			traceback.print_exc()
@@ -783,12 +790,26 @@ class IRC:
 		self.sendmsg(chan, f' {c_cmd("!poker")} \u2014 Start or join a table (blinds {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)})')
 		self.sendmsg(chan, f' {c_cmd("!check")} | {c_cmd("!call")} | {c_cmd("!raise")} {c_arg("<amt>")} | {c_cmd("!fold")} | {c_cmd("!allin")}')
 		self.sendmsg(chan, f' {bold}\u2500\u2500 General \u2500\u2500{bold}')
-		self.sendmsg(chan, f' {c_cmd("!deal")} \u2014 Force deal  |  {c_cmd("!leave")} \u2014 Leave lobby  |  {c_cmd("!chips")} \u2014 Check/reset chips  |  {c_cmd("!top")} \u2014 Leaderboard  |  {c_cmd("!mini")} \u2014 Toggle compact cards')
+		self.sendmsg(chan, f' {c_cmd("!deal")} \u2014 Force deal  |  {c_cmd("!leave")} \u2014 Leave lobby  |  {c_cmd("!chips")} \u2014 Check/reset chips  |  {c_cmd("!top")} \u2014 Leaderboard  |  {c_cmd("!mini")} \u2014 Toggle compact cards  |  {c_cmd("!cheat")} \u2014 Peek at hidden cards')
 
 	def cmd_mini(self, nick, chan):
 		self.mini_mode = not self.mini_mode
 		mode = 'compact' if self.mini_mode else 'full-size'
 		self.sendmsg(chan, f'Card display set to {bold}{mode}{bold}.')
+
+	def cmd_cheat(self, nick, chan):
+		cheat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'cheat.txt')
+		try:
+			with open(cheat_path, 'r') as f:
+				for line in f:
+					line = line.rstrip('\n')
+					if line:
+						self.sendmsg(chan, line)
+					else:
+						self.raw(f'PRIVMSG {chan} :\x0f')
+					time.sleep(0.3)
+		except FileNotFoundError:
+			self.sendmsg(chan, f'{color("ERROR", red)} cheat.txt not found.')
 
 	# ──────────────────── Blackjack Logic ────────────────────
 
@@ -870,7 +891,7 @@ class IRC:
 		for p in self.players:
 			if p.status == 'busted':
 				new_chips = self.add_chips(p.nick, -p.bet)
-				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} busted ({color("-", red)}{c_money(p.bet)}) {sym_arrow} {c_money(new_chips)}')
+				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} busted ({c_loss(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 			elif p.status == 'blackjack':
 				if dealer_bj:
 					chips = self.get_chips(p.nick)
@@ -890,7 +911,7 @@ class IRC:
 				self.sendmsg(chan, f' {color(sym_dash, yellow)} {c_nick(p.nick)} push {p.total} vs {dtotal} {sym_arrow} {c_money(chips)}')
 			else:
 				new_chips = self.add_chips(p.nick, -p.bet)
-				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses {p.total} vs {dtotal} ({color("-", red)}{c_money(p.bet)}) {sym_arrow} {c_money(new_chips)}')
+				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses {p.total} vs {dtotal} ({c_loss(p.bet)}) {sym_arrow} {c_money(new_chips)}')
 
 		if self.db:
 			self.db.save()
@@ -1122,7 +1143,7 @@ class IRC:
 			new_chips = self.add_chips(p.nick, net)
 			if p.folded:
 				if p.total_bet > 0:
-					self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} folded ({color("-", red)}{c_money(p.total_bet)}) {sym_arrow} {c_money(new_chips)}')
+					self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} folded ({c_loss(p.total_bet)}) {sym_arrow} {c_money(new_chips)}')
 				else:
 					self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} folded {sym_arrow} {c_money(new_chips)}')
 			elif net > 0:
@@ -1131,7 +1152,7 @@ class IRC:
 			elif net == 0:
 				self.sendmsg(chan, f' {color(sym_dash, yellow)} {c_nick(p.nick)} breaks even {sym_arrow} {c_money(new_chips)}')
 			else:
-				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses ({color("-", red)}{c_money(abs(net))}) {sym_arrow} {c_money(new_chips)}')
+				self.sendmsg(chan, f' {color(sym_cross, red)} {c_nick(p.nick)} loses ({c_loss(abs(net))}) {sym_arrow} {c_money(new_chips)}')
 
 		if self.db:
 			self.db.save()
