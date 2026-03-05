@@ -348,14 +348,23 @@ class IRC:
 	def load_db(self):
 		db_path = os.path.join('data', 'chips.json')
 		os.makedirs('data', exist_ok=True)
-		self.db = PickleDB(db_path)
 		try:
+			self.db = PickleDB(db_path)
 			self.db.load()
 			_log('Chip database loaded.')
 		except Exception as ex:
-			_log(f'[!] Database load failed ({ex}), starting fresh.')
-			self.db = PickleDB(db_path)
-		threading.Thread(target=self._db_sync_loop, daemon=True).start()
+			_log(f'[!] Database load failed ({ex}), creating fresh.')
+			traceback.print_exc()
+			try:
+				self.db = PickleDB(db_path)
+				self.db.save()
+				_log('Fresh database created.')
+			except Exception as ex2:
+				_log(f'[!] Could not create database: {ex2}')
+				traceback.print_exc()
+				self.db = None
+		if self.db:
+			threading.Thread(target=self._db_sync_loop, daemon=True).start()
 
 	def _db_sync_loop(self):
 		while True:
@@ -778,6 +787,9 @@ class IRC:
 			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips. Use {c_cmd("!chips")} {c_arg("reset")} to reset to {c_money(STARTING_CHIPS)}.')
 
 	def cmd_top(self, nick, chan):
+		if not self.db:
+			self.sendmsg(chan, f'{color("ERROR", red)} Database not loaded.')
+			return
 		all_keys = self.db.all()
 		if not all_keys:
 			self.sendmsg(chan, 'No players registered yet.')
