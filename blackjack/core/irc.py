@@ -53,14 +53,14 @@ SLOTS_HEADER = " \U0001f3b0  SLOTS  \U0001f3b0 "
 
 SLOT_REELS = ['\U0001f352', '\U0001f34b', '\u2b50', '7\ufe0f\u20e3', '\U0001f48e', '\U0001f514', '\U0001f340']
 SLOT_WEIGHTS = [30, 25, 20, 10, 8, 5, 2]
-SLOT_PAYOUTS = {
-	('\U0001f352', '\U0001f352', '\U0001f352'): 5,
-	('\U0001f34b', '\U0001f34b', '\U0001f34b'): 8,
-	('\u2b50',     '\u2b50',     '\u2b50')    : 15,
-	('7\ufe0f\u20e3', '7\ufe0f\u20e3', '7\ufe0f\u20e3'): 30,
-	('\U0001f48e', '\U0001f48e', '\U0001f48e'): 50,
-	('\U0001f514', '\U0001f514', '\U0001f514'): 75,
-	('\U0001f340', '\U0001f340', '\U0001f340'): 100,
+SLOT_MULTI = {
+	'\U0001f352': 5,
+	'\U0001f34b': 8,
+	'\u2b50'    : 15,
+	'7\ufe0f\u20e3': 30,
+	'\U0001f48e': 50,
+	'\U0001f514': 75,
+	'\U0001f340': 100,
 }
 SLOT_BETS = (10, 100, 1000)
 
@@ -911,6 +911,9 @@ class IRC:
 
 	# ──────────────────── Slots ────────────────────
 
+	def _slot_spin(self):
+		return random.choices(SLOT_REELS, weights=SLOT_WEIGHTS, k=1)[0]
+
 	def cmd_slots(self, nick, chan, args):
 		if not args:
 			self.sendmsg(chan, f'{c_nick(nick)}: usage: {c_cmd("!slots")} {c_arg("10")}, {c_arg("100")}, or {c_arg("1000")}.')
@@ -930,31 +933,63 @@ class IRC:
 			self.sendmsg(chan, f'{c_nick(nick)}: not enough chips ({c_money(chips)}). Bet: {c_money(bet)}.')
 			return
 
-		r1 = random.choices(SLOT_REELS, weights=SLOT_WEIGHTS, k=1)[0]
-		r2 = random.choices(SLOT_REELS, weights=SLOT_WEIGHTS, k=1)[0]
-		r3 = random.choices(SLOT_REELS, weights=SLOT_WEIGHTS, k=1)[0]
+		grid = [[self._slot_spin() for _ in range(3)] for _ in range(3)]
 
-		top    = [random.choice(SLOT_REELS) for _ in range(3)]
-		bottom = [random.choice(SLOT_REELS) for _ in range(3)]
+		lines = [
+			('row0', [grid[0][0], grid[0][1], grid[0][2]]),
+			('row1', [grid[1][0], grid[1][1], grid[1][2]]),
+			('row2', [grid[2][0], grid[2][1], grid[2][2]]),
+			('col0', [grid[0][0], grid[1][0], grid[2][0]]),
+			('col1', [grid[0][1], grid[1][1], grid[2][1]]),
+			('col2', [grid[0][2], grid[1][2], grid[2][2]]),
+			('d1',   [grid[0][0], grid[1][1], grid[2][2]]),
+			('d2',   [grid[0][2], grid[1][1], grid[2][0]]),
+		]
 
-		result = (r1, r2, r3)
-		win = r1 == r2 == r3
-		multiplier = SLOT_PAYOUTS.get(result, 0)
+		wins = []
+		win_cells = set()
+		for name, syms in lines:
+			if syms[0] == syms[1] == syms[2]:
+				sym = syms[0]
+				multi = SLOT_MULTI.get(sym, 0)
+				if multi > 0:
+					wins.append((name, sym, multi))
+					if name == 'row0':
+						win_cells.update([(0,0),(0,1),(0,2)])
+					elif name == 'row1':
+						win_cells.update([(1,0),(1,1),(1,2)])
+					elif name == 'row2':
+						win_cells.update([(2,0),(2,1),(2,2)])
+					elif name == 'col0':
+						win_cells.update([(0,0),(1,0),(2,0)])
+					elif name == 'col1':
+						win_cells.update([(0,1),(1,1),(2,1)])
+					elif name == 'col2':
+						win_cells.update([(0,2),(1,2),(2,2)])
+					elif name == 'd1':
+						win_cells.update([(0,0),(1,1),(2,2)])
+					elif name == 'd2':
+						win_cells.update([(0,2),(1,1),(2,0)])
 
 		self.sendmsg(chan, f'{bold}{color(SLOTS_HEADER, black, yellow)}{bold}')
-		self.sendmsg(chan, f'  {top[0]} {sep} {top[1]} {sep} {top[2]}')
-		if win:
-			self.sendmsg(chan, f'  {color(f" {r1}  {r2}  {r3} ", black, green)}  \u2190')
-		else:
-			self.sendmsg(chan, f'  {r1} {sep} {r2} {sep} {r3}  \u2190')
-		self.sendmsg(chan, f'  {bottom[0]} {sep} {bottom[1]} {sep} {bottom[2]}')
+		for r in range(3):
+			cells = []
+			for c in range(3):
+				sym = grid[r][c]
+				if (r, c) in win_cells:
+					cells.append(color(f' {sym} ', black, green))
+				else:
+					cells.append(f' {sym} ')
+			self.sendmsg(chan, f' {cells[0]}{sep}{cells[1]}{sep}{cells[2]}')
 
-		if win:
-			winnings = bet * multiplier
+		if wins:
+			total_multi = sum(m for _, _, m in wins)
+			winnings = bet * total_multi
 			net = winnings - bet
 			new_chips = self.add_chips(nick, net)
 			self.house_add(-net)
-			self.sendmsg(chan, f'  {color(sym_star, green)} {c_nick(nick)} {bold}{multiplier}x{bold} {sym_arrow} {color("+", green)}{c_money(net)} {sym_arrow} {c_money(new_chips)}')
+			win_desc = ', '.join(f'{s}{bold}{m}x{bold}' for _, s, m in wins)
+			self.sendmsg(chan, f'  {color(sym_star, green)} {c_nick(nick)} {win_desc} {sym_arrow} {color("+", green)}{c_money(net)} {sym_arrow} {c_money(new_chips)}')
 		else:
 			new_chips = self.add_chips(nick, -bet)
 			self.house_add(bet)
