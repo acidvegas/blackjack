@@ -812,6 +812,9 @@ class IRC:
 		nick_lower = nick.lower()
 
 		if args and args[0].lower() == 'reset':
+			if chips >= MIN_BET:
+				self.sendmsg(chan, f'{c_nick(nick)}: you still have {c_money(chips)} \u2014 reset only available below {c_money(MIN_BET)}.')
+				return
 			if nick_lower in resets:
 				remaining = RESET_COOLDOWN - (time.time() - resets[nick_lower])
 				if remaining > 0:
@@ -844,10 +847,10 @@ class IRC:
 				self.sendmsg(chan, f'{c_nick(nick)}: reset processing momentarily.')
 			return
 
-		if chips <= 0:
-			self.sendmsg(chan, f'{c_nick(nick)}: broke. Use {c_cmd("!chips")} {c_arg("reset")} to request a new {c_money(STARTING_CHIPS)} bankroll (24h wait).')
+		if chips < MIN_BET:
+			self.sendmsg(chan, f'{c_nick(nick)}: {c_money(chips)} \u2014 too low to play. Use {c_cmd("!chips")} {c_arg("reset")} to request a new {c_money(STARTING_CHIPS)} bankroll (24h wait).')
 		else:
-			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips. Use {c_cmd("!chips")} {c_arg("reset")} to request a reset to {c_money(STARTING_CHIPS)} (24h wait).')
+			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips.')
 
 	def cmd_give(self, nick, chan, args):
 		if len(args) < 2:
