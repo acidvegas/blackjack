@@ -68,8 +68,9 @@ SLOT_MULTI = {
 	'\U0001f514': 1750,
 	'\U0001f340': 35000,
 }
-SLOT_BETS      = (10, 100, 1000)
-SLOT_HOUR_CAP  = 5000
+SLOT_BETS       = (10, 100, 1000)
+SLOT_HOUR_SPINS = 25
+SLOT_HOUR_CAP   = 5000
 
 
 def color(msg, foreground, background=None):
@@ -156,7 +157,7 @@ class IRC:
 		# Display
 		self.mini_mode = False
 
-		# Slots hourly spend tracker: {nick_lower: [(timestamp, amount), ...]}
+		# Slots hourly tracker: {nick_lower: [(timestamp, bet), ...]}
 		self.slot_spend = {}
 
 		# Blackjack state
@@ -179,6 +180,7 @@ class IRC:
 		self.pk_last_move   = 0
 		self.pk_lobby_timer = None
 		self.pk_cards_shown = False
+		self.pk_buyin       = BIG_BLIND
 
 	# ──────────────────── IRC Protocol ────────────────────
 
@@ -338,7 +340,7 @@ class IRC:
 			elif cmd == '!hit':                   self.cmd_hit(nick, chan)
 			elif cmd == '!stand':                 self.cmd_stand(nick, chan)
 			elif cmd in ('!double', '!dd'):       self.cmd_double(nick, chan)
-			elif cmd in ('!poker', '!pk'):        self.cmd_poker(nick, chan)
+			elif cmd in ('!poker', '!pk'):        self.cmd_poker(nick, chan, parts[1:])
 			elif cmd == '!fold':                  self.cmd_fold(nick, chan)
 			elif cmd == '!check':                 self.cmd_check(nick, chan)
 			elif cmd == '!call':                  self.cmd_call(nick, chan)
@@ -485,9 +487,6 @@ class IRC:
 				if bet < MIN_BET:
 					self.sendmsg(chan, f'{color("ERROR", red)} Minimum bet is {c_money(MIN_BET)}.')
 					return
-				if bet > MAX_BET:
-					self.sendmsg(chan, f'{color("ERROR", red)} Maximum bet is {c_money(MAX_BET)}.')
-					return
 
 			chips = self.get_chips(nick)
 			if chips < bet:
@@ -607,22 +606,34 @@ class IRC:
 
 	# ──────────────────── Poker Commands ────────────────────
 
-	def cmd_poker(self, nick, chan):
+	def cmd_poker(self, nick, chan, args=None):
 		with self.lock:
 			if self._game_busy(chan, allowed='poker'):
 				return
 
 			if self.pk_state == 'idle':
+				buyin = BIG_BLIND
+				if args:
+					try:
+						buyin = int(args[0])
+					except ValueError:
+						self.sendmsg(chan, f'{color("ERROR", red)} Invalid buy-in amount.')
+						return
+					if buyin < BIG_BLIND:
+						self.sendmsg(chan, f'{color("ERROR", red)} Minimum buy-in is {c_money(BIG_BLIND)}.')
+						return
 				chips = self.get_chips(nick)
-				if chips < BIG_BLIND:
-					self.sendmsg(chan, f'{color("ERROR", red)} {c_nick(nick)}: need at least {c_money(BIG_BLIND)} to play. Use {c_cmd("!chips")}.')
+				if chips < buyin:
+					self.sendmsg(chan, f'{color("ERROR", red)} {c_nick(nick)}: need at least {c_money(buyin)} to play. You have {c_money(chips)}.')
 					return
+				self.pk_buyin   = buyin
 				self.pk_state   = 'lobby'
 				self.pk_players = [PokerPlayer(nick)]
 				self.pk_community   = []
 				self.pk_current_bet = 0
 				self.pk_cards_shown = False
-				self.sendmsg(chan, f'{bold}{color(POKER_HEADER, black, green)}{bold} {c_nick(nick)} opened a poker table! Type {c_cmd("!poker")} to join or {c_cmd("!deal")} to start. Blinds: {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
+				buyin_msg = f' Buy-in: {c_money(buyin)} {sep}' if buyin > BIG_BLIND else ''
+				self.sendmsg(chan, f'{bold}{color(POKER_HEADER, black, green)}{bold} {c_nick(nick)} opened a poker table! Type {c_cmd("!poker")} to join or {c_cmd("!deal")} to start.{buyin_msg} Blinds: {c_money(SMALL_BLIND)}/{c_money(BIG_BLIND)} \u2014 {LOBBY_TIMEOUT}s until auto-deal')
 				self.pk_lobby_timer = threading.Timer(LOBBY_TIMEOUT, self._pk_lobby_expired, [chan])
 				self.pk_lobby_timer.daemon = True
 				self.pk_lobby_timer.start()
@@ -635,8 +646,8 @@ class IRC:
 					self.sendmsg(chan, f'{color("ERROR", red)} Table is full ({MAX_PLAYERS} players).')
 					return
 				chips = self.get_chips(nick)
-				if chips < BIG_BLIND:
-					self.sendmsg(chan, f'{color("ERROR", red)} {c_nick(nick)}: need at least {c_money(BIG_BLIND)} to play.')
+				if chips < self.pk_buyin:
+					self.sendmsg(chan, f'{color("ERROR", red)} {c_nick(nick)}: need at least {c_money(self.pk_buyin)} to join. You have {c_money(chips)}.')
 					return
 				self.pk_players.append(PokerPlayer(nick))
 				self.sendmsg(chan, f'{c_nick(nick)} joins the table! [{len(self.pk_players)}/{MAX_PLAYERS}]')
@@ -922,7 +933,7 @@ class IRC:
 			(c_cmd('!raise') + ' ' + c_arg('<amt>'),      'Raise to amount (poker)'),
 			(c_cmd('!fold'),                              'Fold hand (poker)'),
 			(c_cmd('!allin'),                             'Go all-in (poker)'),
-			(c_cmd('!slots') + ' ' + c_arg('<bet>'),       'Spin the slots ($10, $100, $1,000)'),
+			(c_cmd('!slots') + ' ' + c_arg('<bet>'),       f'Spin the slots ($10/$100/$1,000, {c_money(SLOT_HOUR_CAP)} or {SLOT_HOUR_SPINS} spins/hr)'),
 			(c_cmd('!deal'),                              'Force deal if lobby open'),
 			(c_cmd('!leave'),                             'Leave the lobby'),
 			(c_cmd('!chips'),                             'Check your chip balance'),
@@ -960,7 +971,7 @@ class IRC:
 
 	def cmd_slots(self, nick, chan, args):
 		if not args:
-			self.sendmsg(chan, f'{c_nick(nick)}: usage: {c_cmd("!slots")} {c_arg("10")}, {c_arg("100")}, or {c_arg("1000")}.')
+			self.sendmsg(chan, f'{c_nick(nick)}: usage: {c_cmd("!slots")} {c_arg("10")}, {c_arg("100")}, or {c_arg("1000")} ({c_money(SLOT_HOUR_CAP)} or {SLOT_HOUR_SPINS} spins/hr)')
 			return
 		try:
 			bet = int(args[0])
@@ -974,7 +985,7 @@ class IRC:
 
 		chips = self.get_chips(nick)
 		if chips < bet:
-			self.sendmsg(chan, f'{c_nick(nick)}: not enough chips ({c_money(chips)}). Bet: {c_money(bet)}.')
+			self.sendmsg(chan, f'{c_nick(nick)}: not enough chips ({c_money(chips)}).')
 			return
 
 		now = time.time()
@@ -982,78 +993,45 @@ class IRC:
 		history = self.slot_spend.get(key, [])
 		history = [(t, a) for t, a in history if now - t < 3600]
 		self.slot_spend[key] = history
+		spins = len(history)
 		spent = sum(a for _, a in history)
-		remaining = SLOT_HOUR_CAP - spent
-		if remaining <= 0:
+		if spins >= SLOT_HOUR_SPINS:
 			oldest = min(t for t, _ in history)
 			wait = int(3600 - (now - oldest))
-			mins = wait // 60
-			secs = wait % 60
-			self.sendmsg(chan, f'{c_nick(nick)}: hourly slot limit reached ({c_money(SLOT_HOUR_CAP)}). Try again in {bold}{mins}m {secs}s{bold}.')
+			self.sendmsg(chan, f'{c_nick(nick)}: {SLOT_HOUR_SPINS} spins/hr limit reached. Try again in {bold}{wait // 60}m {wait % 60}s{bold}.')
 			return
-		if bet > remaining:
-			self.sendmsg(chan, f'{c_nick(nick)}: only {c_money(remaining)} left in your hourly slot budget ({c_money(SLOT_HOUR_CAP)}/hr).')
+		if spent + bet > SLOT_HOUR_CAP:
+			remaining = SLOT_HOUR_CAP - spent
+			if remaining <= 0:
+				oldest = min(t for t, _ in history)
+				wait = int(3600 - (now - oldest))
+				self.sendmsg(chan, f'{c_nick(nick)}: hourly spend limit reached ({c_money(SLOT_HOUR_CAP)}). Try again in {bold}{wait // 60}m {wait % 60}s{bold}.')
+			else:
+				self.sendmsg(chan, f'{c_nick(nick)}: only {c_money(remaining)} left in your hourly slot budget ({c_money(SLOT_HOUR_CAP)}/hr).')
 			return
 
 		self.slot_spend[key].append((now, bet))
 
-		grid = [[self._slot_spin() for _ in range(3)] for _ in range(3)]
+		r1, r2, r3 = self._slot_spin(), self._slot_spin(), self._slot_spin()
+		top    = [random.choice(SLOT_REELS) for _ in range(3)]
+		bottom = [random.choice(SLOT_REELS) for _ in range(3)]
 
-		lines = [
-			('row0', [grid[0][0], grid[0][1], grid[0][2]]),
-			('row1', [grid[1][0], grid[1][1], grid[1][2]]),
-			('row2', [grid[2][0], grid[2][1], grid[2][2]]),
-			('col0', [grid[0][0], grid[1][0], grid[2][0]]),
-			('col1', [grid[0][1], grid[1][1], grid[2][1]]),
-			('col2', [grid[0][2], grid[1][2], grid[2][2]]),
-			('d1',   [grid[0][0], grid[1][1], grid[2][2]]),
-			('d2',   [grid[0][2], grid[1][1], grid[2][0]]),
-		]
-
-		wins = []
-		win_cells = set()
-		for name, syms in lines:
-			if syms[0] == syms[1] == syms[2]:
-				sym = syms[0]
-				multi = SLOT_MULTI.get(sym, 0)
-				if multi > 0:
-					wins.append((name, sym, multi))
-					if name == 'row0':
-						win_cells.update([(0,0),(0,1),(0,2)])
-					elif name == 'row1':
-						win_cells.update([(1,0),(1,1),(1,2)])
-					elif name == 'row2':
-						win_cells.update([(2,0),(2,1),(2,2)])
-					elif name == 'col0':
-						win_cells.update([(0,0),(1,0),(2,0)])
-					elif name == 'col1':
-						win_cells.update([(0,1),(1,1),(2,1)])
-					elif name == 'col2':
-						win_cells.update([(0,2),(1,2),(2,2)])
-					elif name == 'd1':
-						win_cells.update([(0,0),(1,1),(2,2)])
-					elif name == 'd2':
-						win_cells.update([(0,2),(1,1),(2,0)])
+		win = r1 == r2 == r3
+		multi = SLOT_MULTI.get(r1, 0) if win else 0
 
 		self.sendmsg(chan, f'{bold}{color(SLOTS_HEADER, black, yellow)}{bold}')
-		for r in range(3):
-			cells = []
-			for c in range(3):
-				sym = grid[r][c]
-				if (r, c) in win_cells:
-					cells.append(color(f' {sym} ', black, green))
-				else:
-					cells.append(f' {sym} ')
-			self.sendmsg(chan, f' {cells[0]}{sep}{cells[1]}{sep}{cells[2]}')
+		self.sendmsg(chan, f'  {top[0]} {sep} {top[1]} {sep} {top[2]}')
+		if win:
+			self.sendmsg(chan, f'  {color(f" {r1}  {r2}  {r3} ", black, green)}  \u2190')
+		else:
+			self.sendmsg(chan, f'  {r1} {sep} {r2} {sep} {r3}  \u2190')
+		self.sendmsg(chan, f'  {bottom[0]} {sep} {bottom[1]} {sep} {bottom[2]}')
 
-		if wins:
-			total_multi = sum(m for _, _, m in wins)
-			winnings = bet * total_multi
-			net = winnings - bet
+		if win:
+			net = (bet * multi) - bet
 			new_chips = self.add_chips(nick, net)
 			self.house_add(-net)
-			win_desc = ', '.join(f'{s}{bold}{m}x{bold}' for _, s, m in wins)
-			self.sendmsg(chan, f'  {color(sym_star, green)} {c_nick(nick)} {win_desc} {sym_arrow} {color("+", green)}{c_money(net)} {sym_arrow} {c_money(new_chips)}')
+			self.sendmsg(chan, f'  {color(sym_star, green)} {c_nick(nick)} {r1}{bold}{multi}x{bold} {sym_arrow} {color("+", green)}{c_money(net)} {sym_arrow} {c_money(new_chips)}')
 		else:
 			new_chips = self.add_chips(nick, -bet)
 			self.house_add(bet)
@@ -1470,6 +1448,7 @@ class IRC:
 		self.pk_min_raise   = BIG_BLIND
 		self.pk_last_move   = 0
 		self.pk_cards_shown = False
+		self.pk_buyin       = BIG_BLIND
 
 	# ──────────────────── Shared Logic ────────────────────
 
