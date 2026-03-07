@@ -1004,8 +1004,9 @@ class IRC:
 		top    = [random.choice(SLOT_REELS) for _ in range(3)]
 		bottom = [random.choice(SLOT_REELS) for _ in range(3)]
 
-		win = r1 == r2 == r3
-		multi = SLOT_MULTI.get(r1, 0) if win else 0
+		match = r1 == r2 == r3
+		multi = SLOT_MULTI.get(r1, 0) if match else 0
+		win = match and multi > 0
 
 		self.sendmsg(chan, f'{bold}{color(SLOTS_HEADER, black, yellow)}{bold}')
 		self.sendmsg(chan, f'  {top[0]} {sep} {top[1]} {sep} {top[2]}')
