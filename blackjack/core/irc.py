@@ -344,6 +344,7 @@ class IRC:
 			elif cmd == '!mini':                  self.cmd_mini(nick, chan)
 			elif cmd == '!cheat':                 self.cmd_cheat(nick, chan)
 			elif cmd == '!slots':                 self.cmd_slots(nick, chan, parts[1:])
+			elif cmd == '!give':                  self.cmd_give(nick, chan, parts[1:])
 		except Exception as ex:
 			_log(f'[!] Command error ({cmd}): {ex}')
 			traceback.print_exc()
@@ -844,6 +845,35 @@ class IRC:
 		else:
 			self.sendmsg(chan, f'{c_nick(nick)} has {c_money(chips)} in chips. Use {c_cmd("!chips")} {c_arg("reset")} to request a reset to {c_money(STARTING_CHIPS)} (24h wait).')
 
+	def cmd_give(self, nick, chan, args):
+		if len(args) < 2:
+			self.sendmsg(chan, f'{c_nick(nick)}: usage: {c_cmd("!give")} {c_arg("<nick> <amount>")}')
+			return
+		target = args[0]
+		try:
+			amount = int(args[1])
+		except ValueError:
+			self.sendmsg(chan, f'{c_nick(nick)}: amount must be a number.')
+			return
+		if amount <= 0:
+			self.sendmsg(chan, f'{c_nick(nick)}: amount must be positive.')
+			return
+		if target.lower() == nick.lower():
+			self.sendmsg(chan, f'{c_nick(nick)}: you can\'t give chips to yourself.')
+			return
+		sender_chips = self.get_chips(nick)
+		if sender_chips < amount:
+			self.sendmsg(chan, f'{c_nick(nick)}: not enough chips ({c_money(sender_chips)}).')
+			return
+		target_data = self.db.get(target.lower())
+		if target_data is None:
+			self.sendmsg(chan, f'{c_nick(nick)}: player {c_nick(target)} not found.')
+			return
+		self.add_chips(nick, -amount)
+		self.add_chips(target, amount)
+		self.save_db()
+		self.sendmsg(chan, f'{c_nick(nick)} gave {c_money(amount)} to {c_nick(target)}.')
+
 	def cmd_top(self, nick, chan):
 		if self.db is None:
 			self.sendmsg(chan, f'{color("ERROR", red)} Database not loaded.')
@@ -860,7 +890,7 @@ class IRC:
 		leaderboard.sort(key=lambda x: x[1], reverse=True)
 		house = self.house_chips()
 		self.sendmsg(chan, f'{bold}{color(" TOP 10 ", black, green)}{bold}')
-		self.sendmsg(chan, f' House: {c_money(house)}')
+		self.sendmsg(chan, f' {bold}#0 {bold} {c_nick("House".ljust(20))} {c_money(house)}')
 		for i, (name, chips) in enumerate(leaderboard[:10], 1):
 			pad = name[:20].ljust(20)
 			self.sendmsg(chan, f' {bold}#{i:<2}{bold} {c_nick(pad)} {c_money(chips)}')
@@ -884,6 +914,7 @@ class IRC:
 			(c_cmd('!leave'),                             'Leave the lobby'),
 			(c_cmd('!chips'),                             'Check your chip balance'),
 			(c_cmd('!chips') + ' ' + c_arg('reset'),      'Request chip reset (24h wait)'),
+			(c_cmd('!give') + ' ' + c_arg('<nick> <amt>'), 'Give chips to another player'),
 			(c_cmd('!top'),                               'Leaderboard'),
 			(c_cmd('!mini'),                              'Toggle compact card display'),
 			(c_cmd('!cheat'),                             'Blackjack strategy sheet'),
