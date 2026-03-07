@@ -23,8 +23,8 @@ HOUSE_STARTING   = 0
 
 # --- Card Data ---
 SUITS = {
-	'hearts'   : ('♥', True),
-	'diamonds' : ('♦', True),
+	'hearts'   : ('♥',  True),
+	'diamonds' : ('♦',  True),
 	'clubs'    : ('♣', False),
 	'spades'   : ('♠', False),
 }

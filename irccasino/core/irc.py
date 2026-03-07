@@ -188,8 +188,6 @@ class IRC:
 		try:
 			self.create_socket()
 			self.sock.connect((config.connection.server, config.connection.port))
-			if config.login.network:
-				self.raw('PASS ' + config.login.network)
 			self.raw(f'USER {config.ident.username} 0 * :{config.ident.realname}')
 			self.raw('NICK ' + config.ident.nickname)
 		except socket.error as ex:
@@ -199,18 +197,10 @@ class IRC:
 			self.listen()
 
 	def create_socket(self):
-		family    = socket.AF_INET6 if config.connection.ipv6 else socket.AF_INET
-		self.sock = socket.socket(family, socket.SOCK_STREAM)
-		if config.connection.vhost:
-			self.sock.bind((config.connection.vhost, 0))
+		self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		if config.connection.ssl:
 			ctx = ssl.create_default_context()
-			if not config.connection.ssl_verify:
-				ctx.check_hostname = False
-				ctx.verify_mode    = ssl.CERT_NONE
-			if config.cert.file:
-				ctx.load_cert_chain(config.cert.file, config.cert.key, config.cert.password)
-			self.sock = ctx.wrap_socket(self.sock, server_hostname=config.connection.server)
+			self.sock = ctx.wrap_socket(self.sock)
 
 	def raw(self, msg):
 		_log(f'[>>] {msg}')
@@ -297,11 +287,9 @@ class IRC:
 		except Exception as ex:
 			_log(f'[!] Failed to load database: {ex}')
 			traceback.print_exc()
-		if config.login.nickserv:
-			self.identify(config.ident.username, config.login.nickserv)
-		if config.login.operator:
-			self.raw(f'OPER {config.ident.username} {config.login.operator}')
-		self.join(config.connection.channel, config.connection.key)
+		if config.ident.nickserv:
+			self.identify(config.ident.username, config.ident.nickserv)
+		self.join(config.connection.channel)
 		self.chan = config.connection.channel
 
 	def event_disconnect(self):
@@ -316,7 +304,7 @@ class IRC:
 	def event_kick(self, nick, chan, kicked):
 		if kicked == config.ident.nickname and chan.lower() == config.connection.channel.lower():
 			time.sleep(3)
-			self.join(config.connection.channel, config.connection.key)
+			self.join(config.connection.channel)
 		else:
 			self.player_left(kicked, chan)
 

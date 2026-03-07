@@ -8,6 +8,8 @@ sys.dont_write_bytecode = True
 os.chdir(sys.path[0] or '.')
 sys.path += ('core',)
 
+import irc
+
 print('########################################################')
 print('#                                                      #')
 print('#                  BlackJack IRC Bot                   #')
@@ -16,10 +18,4 @@ print('#             https://acid.vegas/blackjack             #')
 print('#                                                      #')
 print('########################################################')
 
-if sys.version_info.major < 3:
-	raise SystemExit('Python 3 is required!')
-if os.name != 'nt' and os.getuid() == 0:
-	raise SystemExit('Do not run as root!')
-
-import irc
 irc.BlackJack.connect()
