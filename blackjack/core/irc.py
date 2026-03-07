@@ -11,7 +11,7 @@ import ssl
 import threading
 import time
 import traceback
-from collections import Counter
+
 
 import config
 
@@ -61,15 +61,6 @@ SLOT_PAYOUTS = {
 	('\U0001f48e', '\U0001f48e', '\U0001f48e'): 50,
 	('\U0001f514', '\U0001f514', '\U0001f514'): 75,
 	('\U0001f340', '\U0001f340', '\U0001f340'): 100,
-}
-SLOT_TWO_MATCH = {
-	'\U0001f352': 2,
-	'\U0001f34b': 2,
-	'\u2b50'    : 3,
-	'7\ufe0f\u20e3': 5,
-	'\U0001f48e': 8,
-	'\U0001f514': 10,
-	'\U0001f340': 15,
 }
 SLOT_BETS = (10, 100, 1000)
 
@@ -921,14 +912,14 @@ class IRC:
 	# ──────────────────── Slots ────────────────────
 
 	def cmd_slots(self, nick, chan, args):
-		if args:
-			try:
-				bet = int(args[0])
-			except ValueError:
-				self.sendmsg(chan, f'{c_nick(nick)}: invalid bet. Use {c_cmd("!slots")} {c_arg("10")}, {c_arg("100")}, or {c_arg("1000")}.')
-				return
-		else:
-			bet = SLOT_BETS[0]
+		if not args:
+			self.sendmsg(chan, f'{c_nick(nick)}: usage: {c_cmd("!slots")} {c_arg("10")}, {c_arg("100")}, or {c_arg("1000")}.')
+			return
+		try:
+			bet = int(args[0])
+		except ValueError:
+			self.sendmsg(chan, f'{c_nick(nick)}: bet must be {c_money(SLOT_BETS[0])}, {c_money(SLOT_BETS[1])}, or {c_money(SLOT_BETS[2])}.')
+			return
 
 		if bet not in SLOT_BETS:
 			self.sendmsg(chan, f'{c_nick(nick)}: bet must be {c_money(SLOT_BETS[0])}, {c_money(SLOT_BETS[1])}, or {c_money(SLOT_BETS[2])}.')
@@ -946,31 +937,28 @@ class IRC:
 		top    = [random.choice(SLOT_REELS) for _ in range(3)]
 		bottom = [random.choice(SLOT_REELS) for _ in range(3)]
 
-		self.sendmsg(chan, f'{bold}{color(SLOTS_HEADER, black, yellow)}{bold} {c_nick(nick)} {sep} Bet: {c_money(bet)}')
-		self.sendmsg(chan, f'  {top[0]} {sep} {top[1]} {sep} {top[2]}')
-		self.sendmsg(chan, f'  {r1} {sep} {r2} {sep} {r3}  \u2190')
-		self.sendmsg(chan, f'  {bottom[0]} {sep} {bottom[1]} {sep} {bottom[2]}')
-
 		result = (r1, r2, r3)
+		win = r1 == r2 == r3
 		multiplier = SLOT_PAYOUTS.get(result, 0)
 
-		if multiplier == 0:
-			counts = Counter(result)
-			for sym, cnt in counts.items():
-				if cnt == 2 and sym in SLOT_TWO_MATCH:
-					multiplier = SLOT_TWO_MATCH[sym]
-					break
+		self.sendmsg(chan, f'{bold}{color(SLOTS_HEADER, black, yellow)}{bold}')
+		self.sendmsg(chan, f'  {top[0]} {sep} {top[1]} {sep} {top[2]}')
+		if win:
+			self.sendmsg(chan, f'  {color(f" {r1}  {r2}  {r3} ", black, green)}  \u2190')
+		else:
+			self.sendmsg(chan, f'  {r1} {sep} {r2} {sep} {r3}  \u2190')
+		self.sendmsg(chan, f'  {bottom[0]} {sep} {bottom[1]} {sep} {bottom[2]}')
 
-		if multiplier > 0:
+		if win:
 			winnings = bet * multiplier
 			net = winnings - bet
 			new_chips = self.add_chips(nick, net)
 			self.house_add(-net)
-			self.sendmsg(chan, f'  {color(sym_star, green)} {bold}{multiplier}x{bold} {sym_arrow} {color("+", green)}{c_money(net)} {sym_arrow} {c_money(new_chips)}')
+			self.sendmsg(chan, f'  {color(sym_star, green)} {c_nick(nick)} {bold}{multiplier}x{bold} {sym_arrow} {color("+", green)}{c_money(net)} {sym_arrow} {c_money(new_chips)}')
 		else:
 			new_chips = self.add_chips(nick, -bet)
 			self.house_add(bet)
-			self.sendmsg(chan, f'  {color(sym_cross, red)} No match {sym_arrow} {c_loss(bet)} {sym_arrow} {c_money(new_chips)}')
+			self.sendmsg(chan, f'  {color(sym_cross, red)} {c_nick(nick)} {c_loss(bet)} {sym_arrow} {c_money(new_chips)}')
 
 		self.save_db()
 
