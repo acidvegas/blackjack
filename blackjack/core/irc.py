@@ -62,7 +62,8 @@ SLOT_MULTI = {
 	'\U0001f514': 75,
 	'\U0001f340': 100,
 }
-SLOT_BETS = (10, 100, 1000)
+SLOT_BETS      = (10, 100, 1000)
+SLOT_HOUR_CAP  = 5000
 
 
 def color(msg, foreground, background=None):
@@ -148,6 +149,9 @@ class IRC:
 
 		# Display
 		self.mini_mode = False
+
+		# Slots hourly spend tracker: {nick_lower: [(timestamp, amount), ...]}
+		self.slot_spend = {}
 
 		# Blackjack state
 		self.state       = 'idle'
@@ -963,6 +967,26 @@ class IRC:
 		if chips < bet:
 			self.sendmsg(chan, f'{c_nick(nick)}: not enough chips ({c_money(chips)}). Bet: {c_money(bet)}.')
 			return
+
+		now = time.time()
+		key = nick.lower()
+		history = self.slot_spend.get(key, [])
+		history = [(t, a) for t, a in history if now - t < 3600]
+		self.slot_spend[key] = history
+		spent = sum(a for _, a in history)
+		remaining = SLOT_HOUR_CAP - spent
+		if remaining <= 0:
+			oldest = min(t for t, _ in history)
+			wait = int(3600 - (now - oldest))
+			mins = wait // 60
+			secs = wait % 60
+			self.sendmsg(chan, f'{c_nick(nick)}: hourly slot limit reached ({c_money(SLOT_HOUR_CAP)}). Try again in {bold}{mins}m {secs}s{bold}.')
+			return
+		if bet > remaining:
+			self.sendmsg(chan, f'{c_nick(nick)}: only {c_money(remaining)} left in your hourly slot budget ({c_money(SLOT_HOUR_CAP)}/hr).')
+			return
+
+		self.slot_spend[key].append((now, bet))
 
 		grid = [[self._slot_spin() for _ in range(3)] for _ in range(3)]
 
