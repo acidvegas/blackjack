@@ -48,6 +48,18 @@ CARD_ART = {
 }
 FACEDOWN = ('░' * 7,) * 5
 
+RANK_IDX = {'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':13, 'K':14}
+SUIT_BASE = {
+	'spades'  : 0x1F0A0,
+	'hearts'  : 0x1F0B0,
+	'diamonds': 0x1F0C0,
+	'clubs'   : 0x1F0D0,
+}
+FACEDOWN_UNI = '\U0001F0A0'
+
+def unicode_card(rank, suit):
+	return chr(SUIT_BASE[suit] + RANK_IDX[rank])
+
 
 # --- Blackjack Hand Value ---
 

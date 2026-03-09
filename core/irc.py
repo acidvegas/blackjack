@@ -19,7 +19,7 @@ from cards import (
 	NUM_DECKS, MAX_PLAYERS, DEFAULT_BET, MIN_BET, MAX_BET, STARTING_CHIPS,
 	MOVE_TIMEOUT, LOBBY_TIMEOUT, DB_SYNC_INTERVAL, RESET_COOLDOWN,
 	SMALL_BLIND, BIG_BLIND, HOUSE_STARTING,
-	SUITS, CARD_ART, FACEDOWN,
+	SUITS, CARD_ART, FACEDOWN, FACEDOWN_UNI, unicode_card,
 	hand_value, poker_best_hand, poker_hand_name, poker_calculate_pots,
 	Shoe, Player, PokerPlayer,
 )
@@ -117,16 +117,28 @@ def _log(msg):
 
 # --- Card Display (IRC-formatted) ---
 
+def format_card_uni(rank, suit):
+	_, is_red = SUITS[suit]
+	ch = unicode_card(rank, suit)
+	return color(ch, red if is_red else white)
+
+def format_hand_uni(cards, hide_first=False):
+	parts = []
+	for i, (rank, suit) in enumerate(cards):
+		if hide_first and i == 0:
+			parts.append(color(FACEDOWN_UNI, light_blue))
+		else:
+			parts.append(format_card_uni(rank, suit))
+	return ' '.join(parts)
+
 def format_card(rank, suit):
 	sym, is_red = SUITS[suit]
 	return color(f'{rank}{sym}', red if is_red else black, white)
-
 
 def format_hand(cards, hide_first=False):
 	if hide_first and len(cards) > 1:
 		return color('[??]', grey, white) + ' ' + ' '.join(format_card(r, s) for r, s in cards[1:])
 	return ' '.join(format_card(r, s) for r, s in cards)
-
 
 def render_hand(cards, hide_first=False):
 	lines = [[] for _ in range(5)]
@@ -212,10 +224,15 @@ class IRC:
 	def blank(self, chan):
 		self.raw(f'PRIVMSG {chan} :\x0f')
 
+	def fmt_card(self, rank, suit):
+		if self.mini_mode:
+			return format_card_uni(rank, suit)
+		return format_card(rank, suit)
+
 	def show_cards(self, target, label, cards, hide_first=False):
 		is_channel = target[0] in '#&'
 		if is_channel and self.mini_mode:
-			compact = format_hand(cards, hide_first)
+			compact = format_hand_uni(cards, hide_first)
 			self.sendmsg(target, f'{label} {compact}')
 		else:
 			lines = render_hand(cards, hide_first)
@@ -936,7 +953,7 @@ class IRC:
 
 	def cmd_mini(self, nick, chan):
 		self.mini_mode = not self.mini_mode
-		mode = 'compact' if self.mini_mode else 'full-size'
+		mode = 'unicode \U0001F0A1' if self.mini_mode else 'full-size ASCII'
 		self.sendmsg(chan, f'Card display set to {bold}{mode}{bold}.')
 
 	def cmd_cheat(self, nick, chan):
@@ -1096,7 +1113,7 @@ class IRC:
 				card = self.shoe.draw()
 				self.dealer_hand.append(card)
 				dtotal = hand_value(self.dealer_hand)
-				self.sendmsg(chan, f'{bold}[Dealer]{bold} hits {format_card(*card)} {sym_arrow} ({color(str(dtotal), light_blue)})')
+				self.sendmsg(chan, f'{bold}[Dealer]{bold} hits {self.fmt_card(*card)} {sym_arrow} ({color(str(dtotal), light_blue)})')
 			if len(self.dealer_hand) > 2:
 				self.show_cards(chan, f'{bold}[Dealer]{bold} ({color(str(dtotal), light_blue)})', self.dealer_hand)
 
@@ -1329,7 +1346,7 @@ class IRC:
 				self.pk_cards_shown = True
 				self.sendmsg(chan, f'{bold}Players are all-in \u2014 showing cards:{bold}')
 				for p in active:
-					self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {format_card(*p.hand[0])} {format_card(*p.hand[1])}')
+					self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {self.fmt_card(*p.hand[0])} {self.fmt_card(*p.hand[1])}')
 			self._pk_next_street(chan)
 			return
 
@@ -1356,7 +1373,7 @@ class IRC:
 				rank = poker_best_hand(p.hand + self.pk_community)
 				evals[p.nick] = rank
 				name = poker_hand_name(rank)
-				self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {format_card(*p.hand[0])} {format_card(*p.hand[1])} \u2014 {color(name, yellow)}')
+				self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {self.fmt_card(*p.hand[0])} {self.fmt_card(*p.hand[1])} \u2014 {color(name, yellow)}')
 			else:
 				self.sendmsg(chan, f' {bold}[{c_nick(p.nick)}]{bold} {color("folded", grey)}')
 
