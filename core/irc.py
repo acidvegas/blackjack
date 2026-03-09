@@ -212,7 +212,9 @@ class IRC:
 		self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		if config.connection.ssl:
 			ctx = ssl.create_default_context()
-			self.sock = ctx.wrap_socket(self.sock)
+			ctx.check_hostname = False
+			ctx.verify_mode    = ssl.CERT_NONE
+			self.sock = ctx.wrap_socket(self.sock, server_hostname=config.connection.server)
 
 	def raw(self, msg):
 		_log(f'[>>] {msg}')
